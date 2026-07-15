@@ -1,0 +1,41 @@
+services:
+  orchestrator:
+    build: .
+    restart: unless-stopped
+    environment:
+      COOLIFY_API_URL: ${COOLIFY_API_URL:-https://coolify.kechlab.com}
+      COOLIFY_API_TOKEN: ${COOLIFY_API_TOKEN}
+      COOLIFY_PROJECT_UUID: ${COOLIFY_PROJECT_UUID:-tso4ocs4k0g0oso8wg04k4c8}
+      COOLIFY_ENVIRONMENT: ${COOLIFY_ENVIRONMENT:-production}
+      COOLIFY_SERVER_UUID: ${COOLIFY_SERVER_UUID:-mggo8cg8kokwcgk48sw0o4c4}
+      COOLIFY_DESTINATION_UUID: ${COOLIFY_DESTINATION_UUID:-xl2ufkvx4pjnjpj8hgsoq9wd}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      ORCH_JWT_SECRET: ${ORCH_JWT_SECRET:-change-me}
+      ORCH_ADMIN_EMAILS: ${ORCH_ADMIN_EMAILS:-}
+      BASE_DOMAIN: ${BASE_DOMAIN:-kechlab.com}
+    volumes:
+      - orchestrator-data:/app/data
+    expose:
+      - "8000"
+    networks:
+      - coolify_proxy
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.orch-http.entrypoints=http
+      - traefik.http.routers.orch-http.middlewares=orch-redirect
+      - traefik.http.middlewares.orch-redirect.redirectscheme.scheme=https
+      - traefik.http.routers.orch-http.rule=Host(`${COOLIFY_FQDN:-plateformehermes.kechlab.com}`)
+      - traefik.http.routers.orch-https.entrypoints=https
+      - traefik.http.routers.orch-https.rule=Host(`${COOLIFY_FQDN:-plateformehermes.kechlab.com}`)
+      - traefik.http.routers.orch-https.service=orch
+      - traefik.http.routers.orch-https.tls=true
+      - traefik.http.routers.orch-https.tls.certresolver=letsencrypt
+      - traefik.http.services.orch.loadbalancer.server.port=8000
+
+networks:
+  coolify_proxy:
+    name: ${COOLIFY_DOCKER_NETWORK:-coolify}
+    external: true
+
+volumes:
+  orchestrator-data:
