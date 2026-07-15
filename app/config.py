@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     # Plan
     plan_price_cents: int = 2900
     plan_monthly_credits_eur: float = 20.0
-    default_model: str = "meta-llama/llama-3.3-70b-instruct:free"
+    default_model: str = "openai/gpt-4o-mini"
 
 
 @lru_cache

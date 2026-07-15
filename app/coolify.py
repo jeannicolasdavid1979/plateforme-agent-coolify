@@ -89,7 +89,7 @@ class CoolifyClient:
         name: str,
         subdomain: str,
         openrouter_api_key: str,
-        model: str = "meta-llama/llama-3.3-70b-instruct:free",
+        model: str = "openai/gpt-4o-mini",
         system_prompt: str = "",
     ) -> DeployedService:
         """Create a Coolify Service from the hermes-agent-with-webui template.

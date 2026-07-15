@@ -31,7 +31,7 @@ class LoginRequest(BaseModel):
 class CreateAgentRequest(BaseModel):
     name: str
     subdomain: str
-    model: str = "meta-llama/llama-3.3-70b-instruct:free"
+    model: str = "openai/gpt-4o-mini"
     system_prompt: str = ""
 
 
