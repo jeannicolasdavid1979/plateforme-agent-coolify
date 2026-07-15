@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Plateforme Agent Coolify</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; }
+        .container { max-width: 900px; margin: 0 auto; padding: 2rem; }
+        h1 { font-size: 1.8rem; margin-bottom: 0.5rem; }
+        .subtitle { color: #94a3b8; margin-bottom: 2rem; }
+        .card { background: #1e293b; border-radius: 12px; padding: 1.5rem; margin-bottom: 1rem; border: 1px solid #334155; }
+        .card h2 { font-size: 1.1rem; margin-bottom: 1rem; color: #38bdf8; }
+        input, textarea, select { width: 100%; padding: 0.7rem; border-radius: 8px; border: 1px solid #475569; background: #0f172a; color: #e2e8f0; font-size: 0.9rem; margin-bottom: 0.8rem; }
+        textarea { min-height: 80px; resize: vertical; }
+        label { display: block; margin-bottom: 0.3rem; font-size: 0.85rem; color: #94a3b8; }
+        button { padding: 0.7rem 1.5rem; border-radius: 8px; border: none; cursor: pointer; font-size: 0.9rem; font-weight: 600; }
+        .btn-primary { background: #3b82f6; color: white; }
+        .btn-primary:hover { background: #2563eb; }
+        .btn-primary:disabled { background: #1e3a5f; cursor: not-allowed; }
+        .btn-secondary { background: #334155; color: #e2e8f0; margin-left: 0.5rem; }
+        .btn-secondary:hover { background: #475569; }
+        .agent-list { display: flex; flex-direction: column; gap: 0.8rem; }
+        .agent-item { background: #1e293b; border-radius: 10px; padding: 1rem 1.2rem; border: 1px solid #334155; display: flex; justify-content: space-between; align-items: center; }
+        .agent-info { flex: 1; }
+        .agent-name { font-weight: 600; font-size: 1rem; }
+        .agent-url { color: #38bdf8; font-size: 0.85rem; text-decoration: none; }
+        .agent-url:hover { text-decoration: underline; }
+        .badge { padding: 0.2rem 0.6rem; border-radius: 20px; font-size: 0.75rem; font-weight: 600; }
+        .badge-pending { background: #854d0e; color: #fef3c7; }
+        .badge-deploying { background: #1e40af; color: #bfdbfe; }
+        .badge-running { background: #166534; color: #dcfce7; }
+        .badge-failed { background: #991b1b; color: #fecaca; }
+        .agent-actions { display: flex; gap: 0.5rem; }
+        .btn-sm { padding: 0.4rem 0.8rem; font-size: 0.8rem; }
+        .error { color: #f87171; font-size: 0.85rem; margin-top: 0.5rem; }
+        .success { color: #4ade80; font-size: 0.85rem; margin-top: 0.5rem; }
+        .password-box { background: #0f172a; border: 1px solid #475569; border-radius: 6px; padding: 0.5rem; font-family: monospace; font-size: 0.85rem; word-break: break-all; cursor: pointer; }
+        .modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); display: none; justify-content: center; align-items: center; z-index: 100; }
+        .modal-overlay.show { display: flex; }
+        .modal { background: #1e293b; border-radius: 12px; padding: 2rem; max-width: 500px; width: 90%; border: 1px solid #334155; }
+        .modal h2 { margin-bottom: 1rem; }
+        .modal .info-row { display: flex; justify-content: space-between; margin-bottom: 0.5rem; }
+        .modal .info-label { color: #94a3b8; }
+        .hidden { display: none; }
+        .loading { text-align: center; padding: 2rem; color: #94a3b8; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 Plateforme Agent Coolify</h1>
+        <p class="subtitle">Déploie des agents Hermes sur ton infrastructure Coolify</p>
+
+        <!-- Login/Register -->
+        <div id="auth-section" class="card">
+            <h2>Connexion</h2>
+            <label>Email</label>
+            <input type="email" id="email" placeholder="vous@example.com" value="david.jn@orange.fr">
+            <label>Mot de passe</label>
+            <input type="password" id="password" placeholder="••••••••" value="FirstRoot2026">
+            <button class="btn-primary" onclick="login()">Se connecter</button>
+            <button class="btn-secondary" onclick="register()">Créer un compte</button>
+            <div id="auth-error" class="error"></div>
+        </div>
+
+        <!-- Dashboard -->
+        <div id="dashboard" class="hidden">
+            <!-- Create agent -->
+            <div class="card">
+                <h2>➕ Créer un agent</h2>
+                <label>Nom de l'agent</label>
+                <input type="text" id="agent-name" placeholder="Agent Comptable">
+                <label>Sous-domaine</label>
+                <input type="text" id="agent-subdomain" placeholder="agent-comptable">
+                <label>Modèle</label>
+                <select id="agent-model">
+                    <option value="openai/gpt-4o">GPT-4o</option>
+                    <option value="openai/gpt-4o-mini">GPT-4o mini</option>
+                    <option value="anthropic/claude-sonnet-4.5">Claude Sonnet 4.5</option>
+                    <option value="anthropic/claude-opus-4.6">Claude Opus 4.6</option>
+                    <option value="meta-llama/llama-3.3-70b-instruct:free">Llama 3.3 70B (gratuit)</option>
+                    <option value="deepseek/deepseek-chat-v3-0324:free">DeepSeek V3 (gratuit)</option>
+                </select>
+                <label>System prompt (optionnel)</label>
+                <textarea id="agent-prompt" placeholder="Tu es un assistant IA..."></textarea>
+                <button class="btn-primary" id="create-btn" onclick="createAgent()">Déployer l'agent</button>
+                <div id="create-msg"></div>
+            </div>
+
+            <!-- Agent list -->
+            <div class="card">
+                <h2>📋 Mes agents</h2>
+                <div id="agent-list" class="agent-list">
+                    <div class="loading">Chargement...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Agent details modal -->
+    <div class="modal-overlay" id="modal" onclick="closeModal(event)">
+        <div class="modal" onclick="event.stopPropagation()">
+            <h2 id="modal-title">Détails de l'agent</h2>
+            <div id="modal-content"></div>
+            <button class="btn-secondary" style="margin-top:1rem" onclick="closeModal()">Fermer</button>
+        </div>
+    </div>
+
+<script>
+let token = localStorage.getItem('token') || '';
+
+// Auto-login if token exists
+if (token) {
+    document.getElementById('auth-section').classList.add('hidden');
+    document.getElementById('dashboard').classList.remove('hidden');
+    loadAgents();
+}
+
+async function api(method, path, body) {
+    const opts = { method, headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' } };
+    if (body) opts.body = JSON.stringify(body);
+    const resp = await fetch(path, opts);
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || JSON.stringify(data));
+    return data;
+}
+
+async function login() {
+    try {
+        const data = await api('POST', '/api/auth/login', {
+            email: document.getElementById('email').value,
+            password: document.getElementById('password').value
+        });
+        token = data.token;
+        localStorage.setItem('token', token);
+        document.getElementById('auth-section').classList.add('hidden');
+        document.getElementById('dashboard').classList.remove('hidden');
+        loadAgents();
+    } catch (e) {
+        document.getElementById('auth-error').textContent = e.message;
+    }
+}
+
+async function register() {
+    try {
+        const data = await api('POST', '/api/auth/register', {
+            email: document.getElementById('email').value,
+            password: document.getElementById('password').value
+        });
+        token = data.token;
+        localStorage.setItem('token', token);
+        document.getElementById('auth-section').classList.add('hidden');
+        document.getElementById('dashboard').classList.remove('hidden');
+        loadAgents();
+    } catch (e) {
+        document.getElementById('auth-error').textContent = e.message;
+    }
+}
+
+async function createAgent() {
+    const btn = document.getElementById('create-btn');
+    const msg = document.getElementById('create-msg');
+    btn.disabled = true;
+    btn.textContent = 'Déploiement en cours...';
+    msg.className = '';
+    msg.textContent = '';
+
+    try {
+        const name = document.getElementById('agent-name').value;
+        const subdomain = document.getElementById('agent-subdomain').value;
+        const model = document.getElementById('agent-model').value;
+        const prompt = document.getElementById('agent-prompt').value;
+
+        if (!name || !subdomain) throw new Error('Nom et sous-domaine requis');
+
+        const data = await api('POST', '/api/agents', { name, subdomain, model, system_prompt: prompt });
+        msg.className = 'success';
+        msg.textContent = 'Agent en cours de déploiement...';
+        document.getElementById('agent-name').value = '';
+        document.getElementById('agent-subdomain').value = '';
+        document.getElementById('agent-prompt').value = '';
+
+        // Poll for status
+        setTimeout(() => loadAgents(), 3000);
+        setTimeout(() => loadAgents(), 10000);
+        setTimeout(() => loadAgents(), 30000);
+        setTimeout(() => loadAgents(), 60000);
+    } catch (e) {
+        msg.className = 'error';
+        msg.textContent = e.message;
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Déployer l'agent';
+    }
+}
+
+async function loadAgents() {
+    try {
+        const data = await api('GET', '/api/agents');
+        const list = document.getElementById('agent-list');
+        if (data.agents.length === 0) {
+            list.innerHTML = '<div style="color:#94a3b8;text-align:center;padding:1rem">Aucun agent pour le moment</div>';
+            return;
+        }
+        list.innerHTML = data.agents.map(a => {
+            const badgeClass = 'badge-' + (a.status || 'pending');
+            const statusText = { pending: 'En attente', deploying: 'Déploiement...', running: 'En ligne', failed: 'Échec' }[a.status] || a.status;
+            const url = a.url ? `<a href="${a.url}" target="_blank" class="agent-url">${a.url}</a>` : '<span style="color:#64748b">URL en attente</span>';
+            return `<div class="agent-item">
+                <div class="agent-info">
+                    <div class="agent-name">${a.name} <span class="badge ${badgeClass}">${statusText}</span></div>
+                    <div style="font-size:0.8rem;color:#64748b;margin-top:0.2rem">${a.model}</div>
+                    ${url}
+                </div>
+                <div class="agent-actions">
+                    <button class="btn-secondary btn-sm" onclick="showDetails('${a.id}')">Détails</button>
+                </div>
+            </div>`;
+        }).join('');
+    } catch (e) {
+        if (e.message.includes('Authentification') || e.message.includes('Jeton')) {
+            localStorage.removeItem('token');
+            token = '';
+            location.reload();
+        }
+    }
+}
+
+async function showDetails(id) {
+    try {
+        const a = await api('GET', '/api/agents/' + id);
+        const modal = document.getElementById('modal');
+        document.getElementById('modal-title').textContent = a.name;
+        document.getElementById('modal-content').innerHTML = `
+            <div class="info-row"><span class="info-label">Statut</span><span class="badge badge-${a.status}">${a.status}</span></div>
+            <div class="info-row"><span class="info-label">Sous-domaine</span><span>${a.subdomain}</span></div>
+            <div class="info-row"><span class="info-label">Modèle</span><span>${a.model}</span></div>
+            <div class="info-row"><span class="info-label">URL</span><a href="${a.url || '#'}" target="_blank" class="agent-url">${a.url || 'N/A'}</a></div>
+            ${a.password ? `<div style="margin-top:1rem"><div class="info-label">Mot de passe</div><div class="password-box" onclick="navigator.clipboard.writeText('${a.password}');this.textContent='Copié !';setTimeout(()=>this.textContent='${a.password}',2000)">${a.password}</div></div>` : ''}
+            ${a.coolify_service_uuid ? `<div class="info-row" style="margin-top:0.5rem"><span class="info-label">Coolify UUID</span><span style="font-size:0.8rem">${a.coolify_service_uuid}</span></div>` : ''}
+        `;
+        modal.classList.add('show');
+    } catch (e) {
+        alert(e.message);
+    }
+}
+
+function closeModal(e) {
+    if (!e || e.target.classList.contains('modal-overlay')) {
+        document.getElementById('modal').classList.remove('show');
+    }
+}
+</script>
+</body>
+</html>
