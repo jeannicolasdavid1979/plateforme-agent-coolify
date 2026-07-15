@@ -15,6 +15,7 @@ services:
       BASE_DOMAIN: ${BASE_DOMAIN:-kechlab.com}
     volumes:
       - orchestrator-data:/app/data
+      - /var/run/docker.sock:/var/run/docker.sock
     expose:
       - "8000"
     networks:

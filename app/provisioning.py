@@ -130,9 +130,39 @@ class ProvisioningEngine:
         if not client or not tenant.instance_url:
             return "skip (pas d'URL)"
 
+        # Attendre que les conteneurs soient up avant d'injecter le modèle
+        import time
+        time.sleep(15)
+
+        # Injecter le modèle dans config.yaml du conteneur hermes-agent
+        # (l'agent ne lit pas HERMES_INSTANCE_MODEL, il lit config.yaml)
+        self._inject_model(tenant)
+
         if client.is_healthy(tenant.instance_url, timeout=120):
             return "instance en ligne"
         raise RuntimeError("l'instance n'a pas répondu au health check")
+
+    def _inject_model(self, tenant: Tenant) -> None:
+        """Écrit le modèle dans config.yaml du conteneur hermes-agent via docker exec."""
+        import subprocess
+        agent_container = f"hermes-agent-{tenant.coolify_service_uuid}"
+        config_path = "/home/hermes/.hermes/config.yaml"
+        model = tenant.model or self.settings.default_model
+        cmd = (
+            f'docker exec {agent_container} bash -c '
+            f'"mkdir -p /home/hermes/.hermes && '
+            f'cat > {config_path} << EOF\\n'
+            f'model:\\n'
+            f'  default: \\"{model}\\"\\n'
+            f'  provider: \\"auto\\"\\n'
+            f'  base_url: \\"https://openrouter.ai/api/v1\\"\\n'
+            f'EOF"'
+        )
+        try:
+            subprocess.run(cmd, shell=True, timeout=30, capture_output=True)
+            logger.info("Modèle %s injecté dans %s", model, agent_container)
+        except Exception as exc:
+            logger.warning("Injection modèle échouée (non-fatal): %s", exc)
 
     def _step_done(self, tenant: Tenant, job: ProvisioningJob) -> str:
         return "agent prêt"

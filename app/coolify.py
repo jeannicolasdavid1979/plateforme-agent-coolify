@@ -89,7 +89,7 @@ class CoolifyClient:
         name: str,
         subdomain: str,
         openrouter_api_key: str,
-        model: str = "openai/gpt-4o-mini",
+        model: str = "openai/gpt-4o",
         system_prompt: str = "",
     ) -> DeployedService:
         """Create a Coolify Service from the hermes-agent-with-webui template.

@@ -31,7 +31,7 @@ class LoginRequest(BaseModel):
 class CreateAgentRequest(BaseModel):
     name: str
     subdomain: str
-    model: str = "openai/gpt-4o-mini"
+    model: str = "openai/gpt-4o"
     system_prompt: str = ""
 
 

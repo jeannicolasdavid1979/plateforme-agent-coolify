@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     # Plan
     plan_price_cents: int = 2900
     plan_monthly_credits_eur: float = 20.0
-    default_model: str = "openai/gpt-4o-mini"
+    default_model: str = "openai/gpt-4o"
 
 
 @lru_cache
