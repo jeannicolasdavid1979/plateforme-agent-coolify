@@ -11,7 +11,6 @@ code without needing pip install. This is the proven, working setup.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
 
 import httpx
 
@@ -20,14 +19,6 @@ from .config import get_settings
 logger = logging.getLogger("coolify")
 
 SERVICE_TYPE = "hermes-agent-with-webui"
-
-
-@dataclass
-class DeployedService:
-    uuid: str
-    name: str
-    fqdn: str
-    password: str | None = None
 
 
 class CoolifyClient:
@@ -82,71 +73,100 @@ class CoolifyClient:
         resp = httpx.delete(f"{self.base_url}{path}", headers=self._headers, timeout=self.timeout)
         return resp.status_code in (200, 202)
 
-    # ── Deploy an agent ──────────────────────────────────────────────
+    # ── Create / configure / start (une méthode par étape du journal) ─
 
-    def deploy_agent(
-        self,
-        name: str,
-        subdomain: str,
-        openrouter_api_key: str,
-        model: str = "openai/gpt-4o",
-        system_prompt: str = "",
-    ) -> DeployedService:
-        """Create a Coolify Service from the hermes-agent-with-webui template.
-
-        Returns DeployedService with the service UUID, FQDN, and auto-generated
-        password.
-        """
-        service_name = f"hermes-{subdomain}"
-        fqdn = f"https://{subdomain}.{get_settings().base_domain}"
-
-        # 1. Create the service from the template
+    def create_service(self, name: str) -> str:
+        """Create a Coolify Service from the hermes-agent-with-webui template."""
         created = self._post("/api/v1/services", {
             "project_uuid": self.project_uuid,
             "environment_name": self.environment_name,
             "server_uuid": self.server_uuid,
             "destination_uuid": self.destination_uuid,
             "type": SERVICE_TYPE,
-            "name": service_name,
+            "name": name,
         })
         svc_uuid = created["uuid"]
-        logger.info("Service %s created (uuid=%s)", service_name, svc_uuid)
+        logger.info("Service %s created (uuid=%s)", name, svc_uuid)
+        return svc_uuid
 
-        # 2. Set environment variables
-        # hermes-agent reads the model from HERMES_MODEL (not HERMES_INSTANCE_MODEL)
-        self._set_env(svc_uuid, "OPENROUTER_API_KEY", openrouter_api_key)
-        self._set_env(svc_uuid, "HERMES_MODEL", model)
-        if system_prompt:
-            self._set_env(svc_uuid, "HERMES_SYSTEM_PROMPT", system_prompt)
+    def get_service(self, svc_uuid: str) -> dict:
+        data = self._get(f"/api/v1/services/{svc_uuid}")
+        return data if isinstance(data, dict) else {}
 
-        # 3. Set the FQDN for the webui service
+    def service_fqdns(self, svc_uuid: str) -> list[str]:
+        """Domaines réellement enregistrés par Coolify pour ce service."""
+        try:
+            apps = self.get_service(svc_uuid).get("applications") or []
+            return [a.get("fqdn") or "" for a in apps if a.get("fqdn")]
+        except Exception:
+            return []
+
+    def patch_service_fqdn(self, svc_uuid: str, service_name: str, fqdn: str) -> bool:
         try:
             self._patch(f"/api/v1/services/{svc_uuid}", {
-                "service_name": "hermes-webui",
+                "service_name": service_name,
                 "fqdn": fqdn,
             })
-            logger.info("FQDN set: %s", fqdn)
+            return True
         except RuntimeError as exc:
-            logger.warning("FQDN patch failed (non-fatal): %s", exc)
+            logger.warning("FQDN patch refusé : %s", exc)
+            return False
 
-        # 4. Retrieve the auto-generated webui password
-        password = self._get_env_value(svc_uuid, "SERVICE_PASSWORD_HERMESWEBUI")
+    def trigger_deploy(self, svc_uuid: str) -> bool:
+        """Force un déploiement complet — contrairement à /start, Coolify
+        re-parse le compose et régénère les labels Traefik (donc le domaine)."""
+        try:
+            resp = httpx.get(
+                f"{self.base_url}/api/v1/deploy",
+                params={"uuid": svc_uuid},
+                headers=self._headers,
+                timeout=self.timeout,
+            )
+            return resp.status_code == 200
+        except Exception as exc:
+            logger.warning("trigger_deploy: %s", exc)
+            return False
 
-        # 5. Start the service
+    def start_service(self, svc_uuid: str) -> bool:
         try:
             self._post(f"/api/v1/services/{svc_uuid}/start")
-            logger.info("Service %s started", service_name)
+            return True
         except RuntimeError as exc:
-            logger.warning("Start failed (non-fatal, Coolify may auto-start): %s", exc)
+            logger.warning("start refusé : %s", exc)
+            return False
 
-        return DeployedService(
-            uuid=svc_uuid,
-            name=service_name,
-            fqdn=fqdn,
-            password=password,
-        )
+    def restart_service(self, svc_uuid: str) -> bool:
+        try:
+            self._post(f"/api/v1/services/{svc_uuid}/restart")
+            return True
+        except RuntimeError as exc:
+            logger.warning("restart refusé : %s", exc)
+            return False
+
+    def wait_running(self, svc_uuid: str, timeout: int = 180) -> str:
+        """Poll le statut Coolify jusqu'à 'running' (ou expiration).
+
+        Retourne le dernier statut vu (ex. 'running:healthy', 'exited').
+        Un 'exited' précoce est normal pendant le pull/démarrage — on
+        continue de guetter jusqu'au bout du délai.
+        """
+        import time
+        deadline = time.monotonic() + timeout
+        last = ""
+        while time.monotonic() < deadline:
+            last = self.service_status(svc_uuid) or last
+            if last and "running" in last:
+                return last
+            time.sleep(5)
+        return last
+
+    def get_password(self, svc_uuid: str) -> str | None:
+        return self._get_env_value(svc_uuid, "SERVICE_PASSWORD_HERMESWEBUI")
 
     # ── Environment variables ────────────────────────────────────────
+
+    def set_env(self, svc_uuid: str, key: str, value: str) -> None:
+        self._set_env(svc_uuid, key, value)
 
     def _set_env(self, svc_uuid: str, key: str, value: str) -> None:
         """Set or update an environment variable on a service."""

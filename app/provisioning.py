@@ -100,30 +100,66 @@ class ProvisioningEngine:
         if not client:
             raise RuntimeError("Coolify API non configurée")
 
-        svc = client.deploy_agent(
-            name=tenant.name,
-            subdomain=tenant.subdomain,
-            openrouter_api_key=self.settings.openrouter_api_key,
-            model=tenant.model,
-            system_prompt=tenant.system_prompt,
-        )
-        tenant.coolify_service_uuid = svc.uuid
-        tenant.instance_url = svc.fqdn
-        tenant.instance_password = svc.password
+        svc_uuid = client.create_service(f"hermes-{tenant.subdomain}")
+        tenant.coolify_service_uuid = svc_uuid
+        tenant.instance_url = f"https://{tenant.subdomain}.{self.settings.base_domain}"
+        tenant.instance_password = client.get_password(svc_uuid)
         self.db.commit()
-        return f"service {svc.uuid[:12]} → {svc.fqdn}"
+        return f"service {svc_uuid[:12]} → {tenant.instance_url}"
 
     def _step_configure_env(self, tenant: Tenant, job: ProvisioningJob) -> str:
-        # Env vars are set during deploy_agent — nothing more to do
-        return "variables poussées"
+        client = get_client()
+        svc_uuid = tenant.coolify_service_uuid
+        fqdn_host = f"{tenant.subdomain}.{self.settings.base_domain}"
+
+        # hermes-agent lit le modèle dans HERMES_MODEL
+        client.set_env(svc_uuid, "OPENROUTER_API_KEY", self.settings.openrouter_api_key)
+        client.set_env(svc_uuid, "HERMES_MODEL", tenant.model)
+        if tenant.system_prompt:
+            client.set_env(svc_uuid, "HERMES_SYSTEM_PROMPT", tenant.system_prompt)
+
+        # Variables magiques Coolify : c'est ELLES que le parseur de compose
+        # lit pour générer les labels Traefik. Sans ça, Coolify garde le
+        # domaine sslip.io généré à la création du service.
+        client.set_env(svc_uuid, "SERVICE_FQDN_HERMESWEBUI", fqdn_host)
+        client.set_env(svc_uuid, "SERVICE_URL_HERMESWEBUI", f"https://{fqdn_host}")
+        return "variables + domaine poussés"
 
     def _step_set_fqdn(self, tenant: Tenant, job: ProvisioningJob) -> str:
-        # FQDN is set during deploy_agent — nothing more to do
-        return f"fqdn={tenant.instance_url}"
+        client = get_client()
+        svc_uuid = tenant.coolify_service_uuid
+        client.patch_service_fqdn(svc_uuid, "hermes-webui", tenant.instance_url)
+
+        # Vérité terrain : quel(s) domaine(s) Coolify a-t-il vraiment retenus ?
+        want = tenant.instance_url.replace("https://", "")
+        fqdns = client.service_fqdns(svc_uuid)
+        if any(want in f for f in fqdns):
+            return f"domaine appliqué : {want}"
+        return (
+            f"Coolify affiche {', '.join(fqdns) or 'aucun domaine'} — "
+            "labels régénérés au déploiement qui suit"
+        )
 
     def _step_start_service(self, tenant: Tenant, job: ProvisioningJob) -> str:
-        # Service is started during deploy_agent — nothing more to do
-        return "service démarré"
+        client = get_client()
+        svc_uuid = tenant.coolify_service_uuid
+
+        # /deploy (et non /start) : force le re-parse du compose, donc les
+        # labels Traefik avec le bon domaine. /start réutilisait le rendu
+        # fait à la création → FQDN sslip.io et conteneurs invisibles.
+        if not client.trigger_deploy(svc_uuid):
+            client.start_service(svc_uuid)
+
+        status = client.wait_running(svc_uuid, timeout=240)
+        if not status or "running" not in status:
+            # Un service resté 'exited' après création : on retente une fois
+            client.restart_service(svc_uuid)
+            status = client.wait_running(svc_uuid, timeout=120)
+        if not status or "running" not in status:
+            raise RuntimeError(
+                f"les conteneurs ne démarrent pas (statut Coolify : {status or 'inconnu'})"
+            )
+        return f"conteneurs démarrés ({status})"
 
     def _step_health_check(self, tenant: Tenant, job: ProvisioningJob) -> str:
         client = get_client()
@@ -133,6 +169,12 @@ class ProvisioningEngine:
         # Attendre que les conteneurs soient up avant d'injecter le modèle
         import time
         time.sleep(15)
+
+        # Le mot de passe webui est généré par Coolify au parse du compose —
+        # s'il n'existait pas encore à la création, il existe forcément ici.
+        if not tenant.instance_password:
+            tenant.instance_password = client.get_password(tenant.coolify_service_uuid)
+            self.db.commit()
 
         # Injecter le modèle dans config.yaml du conteneur hermes-agent
         # (l'agent ne lit pas HERMES_INSTANCE_MODEL, il lit config.yaml)
