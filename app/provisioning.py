@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 
+import yaml
 from sqlalchemy.orm import Session
 
 from .config import get_settings
@@ -22,6 +24,74 @@ STEPS = [
     "health_check",
     "done",
 ]
+
+# L'image nousresearch/hermes-agent ne lit pas HERMES_MODEL : elle lit
+# ~/.hermes/config.yaml. On écrit ce fichier AU DÉMARRAGE DU CONTENEUR
+# (entrypoint injecté dans le compose) — un docker exec depuis le conteneur
+# de la plateforme est impossible (pas de CLI docker ni de socket).
+# `$$` : les variables sont résolues par le shell du conteneur, pas par
+# docker compose au parse.
+_AGENT_BOOTSTRAP = (
+    "mkdir -p /home/hermes/.hermes && "
+    "printf 'model:\\n"
+    "  default: \"%s\"\\n"
+    "  provider: \"auto\"\\n"
+    "  base_url: \"https://openrouter.ai/api/v1\"\\n' "
+    '"$${HERMES_MODEL:-openai/gpt-4o}" > /home/hermes/.hermes/config.yaml; '
+    "exec /init"
+)
+
+_FQDN_KEY_RE = re.compile(r"^SERVICE_(?:FQDN|URL)_HERMESWEBUI(?:_\d+)?$")
+
+
+def customize_compose(compose_yaml: str, fqdn_url: str) -> tuple[str | None, list[str]]:
+    """Adapte le compose du template au tenant.
+
+    1. Fixe explicitement les variables magiques SERVICE_FQDN/URL_HERMESWEBUI
+       au domaine du client — c'est CE que le parseur Coolify lit pour
+       générer les labels Traefik (sinon il garde le sslip.io généré à la
+       création du service).
+    2. Injecte l'entrypoint du conteneur hermes-agent qui écrit le modèle
+       dans config.yaml au boot.
+
+    Retourne (yaml modifié | None si rien reconnu, liste des changements).
+    """
+    try:
+        doc = yaml.safe_load(compose_yaml)
+        services = doc["services"]
+        assert isinstance(services, dict)
+    except Exception as exc:
+        logger.warning("compose illisible : %s", exc)
+        return None, [f"compose illisible ({exc})"]
+
+    changes: list[str] = []
+    for svc_name, svc in services.items():
+        if not isinstance(svc, dict):
+            continue
+
+        # 1. Domaine explicite sur les variables magiques de la webui
+        env = svc.get("environment")
+        if isinstance(env, list):
+            for i, entry in enumerate(env):
+                key = str(entry).split("=", 1)[0].strip()
+                if _FQDN_KEY_RE.match(key):
+                    env[i] = f"{key}={fqdn_url}"
+                    changes.append(f"{key} → {fqdn_url}")
+        elif isinstance(env, dict):
+            for key in list(env):
+                if _FQDN_KEY_RE.match(str(key)):
+                    env[key] = fqdn_url
+                    changes.append(f"{key} → {fqdn_url}")
+
+        # 2. Entrypoint config.yaml sur le conteneur agent
+        image = str(svc.get("image", ""))
+        if "hermes-agent" in image or "hermes-agent" in str(svc_name):
+            svc["entrypoint"] = ["/bin/bash", "-c", _AGENT_BOOTSTRAP]
+            changes.append(f"entrypoint config.yaml sur {svc_name}")
+
+    if not changes:
+        return None, ["aucune variable SERVICE_FQDN_HERMESWEBUI ni service agent trouvés"]
+    return yaml.safe_dump(doc, sort_keys=False, allow_unicode=True), changes
 
 
 class ProvisioningEngine:
@@ -128,17 +198,25 @@ class ProvisioningEngine:
     def _step_set_fqdn(self, tenant: Tenant, job: ProvisioningJob) -> str:
         client = get_client()
         svc_uuid = tenant.coolify_service_uuid
-        client.patch_service_fqdn(svc_uuid, "hermes-webui", tenant.instance_url)
 
-        # Vérité terrain : quel(s) domaine(s) Coolify a-t-il vraiment retenus ?
-        want = tenant.instance_url.replace("https://", "")
-        fqdns = client.service_fqdns(svc_uuid)
-        if any(want in f for f in fqdns):
-            return f"domaine appliqué : {want}"
-        return (
-            f"Coolify affiche {', '.join(fqdns) or 'aucun domaine'} — "
-            "labels régénérés au déploiement qui suit"
-        )
+        # La source de vérité des labels Traefik est le compose du service :
+        # on y inscrit le domaine (et l'entrypoint config.yaml de l'agent),
+        # le déploiement qui suit re-parse le tout.
+        details: list[str] = []
+        compose = client.get_compose_raw(svc_uuid)
+        if compose:
+            patched, changes = customize_compose(compose, tenant.instance_url)
+            if patched and client.update_compose_raw(svc_uuid, patched):
+                details.append("compose adapté : " + " ; ".join(changes))
+            else:
+                details.append("compose non modifié (" + " ; ".join(changes) + ")")
+        else:
+            details.append("compose introuvable via l'API")
+
+        # Ceinture + bretelles : le PATCH fqdn direct, s'il est supporté
+        if client.patch_service_fqdn(svc_uuid, "hermes-webui", tenant.instance_url):
+            details.append("PATCH fqdn accepté")
+        return " — ".join(details)
 
     def _step_start_service(self, tenant: Tenant, job: ProvisioningJob) -> str:
         client = get_client()
@@ -159,15 +237,22 @@ class ProvisioningEngine:
             raise RuntimeError(
                 f"les conteneurs ne démarrent pas (statut Coolify : {status or 'inconnu'})"
             )
-        return f"conteneurs démarrés ({status})"
+
+        # Vérité terrain : le domaine que Coolify a réellement retenu
+        want = tenant.instance_url.replace("https://", "")
+        fqdns = client.service_fqdns(svc_uuid)
+        domain_note = (
+            f", domaine {want} appliqué" if any(want in f for f in fqdns)
+            else f", ATTENTION domaine retenu : {', '.join(fqdns) or 'aucun'}"
+        )
+        return f"conteneurs démarrés ({status}){domain_note}"
 
     def _step_health_check(self, tenant: Tenant, job: ProvisioningJob) -> str:
         client = get_client()
         if not client or not tenant.instance_url:
             return "skip (pas d'URL)"
 
-        # Attendre que les conteneurs soient up avant d'injecter le modèle
-        import time
+        # Laisser Traefik découvrir les nouveaux conteneurs
         time.sleep(15)
 
         # Le mot de passe webui est généré par Coolify au parse du compose —
@@ -175,10 +260,6 @@ class ProvisioningEngine:
         if not tenant.instance_password:
             tenant.instance_password = client.get_password(tenant.coolify_service_uuid)
             self.db.commit()
-
-        # Injecter le modèle dans config.yaml du conteneur hermes-agent
-        # (l'agent ne lit pas HERMES_INSTANCE_MODEL, il lit config.yaml)
-        self._inject_model(tenant)
 
         if client.is_healthy(tenant.instance_url, timeout=300):
             return "instance en ligne"
@@ -196,28 +277,6 @@ class ProvisioningEngine:
             "l'instance n'a pas répondu au health check"
             + (f" (statut Coolify : {state})" if state else "")
         )
-
-    def _inject_model(self, tenant: Tenant) -> None:
-        """Écrit le modèle dans config.yaml du conteneur hermes-agent via docker exec."""
-        import subprocess
-        agent_container = f"hermes-agent-{tenant.coolify_service_uuid}"
-        config_path = "/home/hermes/.hermes/config.yaml"
-        model = tenant.model or self.settings.default_model
-        cmd = (
-            f'docker exec {agent_container} bash -c '
-            f'"mkdir -p /home/hermes/.hermes && '
-            f'cat > {config_path} << EOF\\n'
-            f'model:\\n'
-            f'  default: \\"{model}\\"\\n'
-            f'  provider: \\"auto\\"\\n'
-            f'  base_url: \\"https://openrouter.ai/api/v1\\"\\n'
-            f'EOF"'
-        )
-        try:
-            subprocess.run(cmd, shell=True, timeout=30, capture_output=True)
-            logger.info("Modèle %s injecté dans %s", model, agent_container)
-        except Exception as exc:
-            logger.warning("Injection modèle échouée (non-fatal): %s", exc)
 
     def _step_done(self, tenant: Tenant, job: ProvisioningJob) -> str:
         return "agent prêt"

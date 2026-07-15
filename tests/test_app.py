@@ -165,6 +165,49 @@ def test_pricing_defaults_and_admin_update():
     assert "49,00" in resp.text
 
 
+def test_sanitize_env_value():
+    from app.coolify import CoolifyClient
+    # Les apostrophes cassent le quoting simple du .env généré par Coolify
+    assert CoolifyClient._sanitize_env_value(
+        "Tu es l'artiste, l'agent IA personnel de ton propriétaire."
+    ) == "Tu es l’artiste, l’agent IA personnel de ton propriétaire."
+    # Les retours à la ligne aussi
+    assert CoolifyClient._sanitize_env_value("ligne 1\nligne 2") == "ligne 1 ligne 2"
+    assert CoolifyClient._sanitize_env_value("sk-or-v1-abc123") == "sk-or-v1-abc123"
+
+
+def test_customize_compose():
+    from app.provisioning import customize_compose
+
+    compose = """
+services:
+  hermes-agent:
+    image: nousresearch/hermes-agent
+    environment:
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+  hermes-webui:
+    image: ghcr.io/nesquena/hermes-webui:latest
+    environment:
+      - SERVICE_FQDN_HERMESWEBUI_8787
+      - SERVICE_URL_HERMESWEBUI=${SERVICE_URL_HERMESWEBUI}
+"""
+    patched, changes = customize_compose(compose, "https://artiste.kechlab.com")
+    assert patched is not None
+    assert "SERVICE_FQDN_HERMESWEBUI_8787=https://artiste.kechlab.com" in patched
+    assert "SERVICE_URL_HERMESWEBUI=https://artiste.kechlab.com" in patched
+    # L'entrypoint qui écrit config.yaml est posé sur le conteneur agent
+    assert "config.yaml" in patched and "exec /init" in patched
+    assert len(changes) == 3
+
+    # Un compose sans rien de reconnaissable ne casse pas
+    patched, changes = customize_compose("services:\n  autre:\n    image: nginx\n", "https://x.y")
+    assert patched is None
+
+    # Un compose illisible non plus
+    patched, changes = customize_compose(":::pas du yaml", "https://x.y")
+    assert patched is None
+
+
 def test_delete_agent():
     headers = _register("deleter@example.com")
     resp = client.post("/api/agents", json={"name": "Éphémère", "subdomain": "test-del"}, headers=headers)

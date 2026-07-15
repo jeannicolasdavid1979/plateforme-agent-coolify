@@ -163,10 +163,49 @@ class CoolifyClient:
     def get_password(self, svc_uuid: str) -> str | None:
         return self._get_env_value(svc_uuid, "SERVICE_PASSWORD_HERMESWEBUI")
 
+    # ── Compose raw (source des labels Traefik et des entrypoints) ────
+
+    def get_compose_raw(self, svc_uuid: str) -> str | None:
+        """Le docker-compose du service, décodé si Coolify le renvoie en base64."""
+        import base64
+        raw = self.get_service(svc_uuid).get("docker_compose_raw")
+        if not raw:
+            return None
+        try:
+            decoded = base64.b64decode(raw, validate=True).decode("utf-8")
+            # Un YAML plausible contient forcément 'services'
+            if "services" in decoded:
+                return decoded
+        except Exception:
+            pass
+        return raw
+
+    def update_compose_raw(self, svc_uuid: str, compose_yaml: str) -> bool:
+        """PATCH le compose du service — essaie en base64 (format du POST de
+        création) puis en clair si Coolify refuse."""
+        import base64
+        encoded = base64.b64encode(compose_yaml.encode("utf-8")).decode("ascii")
+        for payload in (encoded, compose_yaml):
+            try:
+                self._patch(f"/api/v1/services/{svc_uuid}", {"docker_compose_raw": payload})
+                return True
+            except RuntimeError as exc:
+                logger.warning("update_compose_raw: %s", exc)
+        return False
+
     # ── Environment variables ────────────────────────────────────────
 
+    @staticmethod
+    def _sanitize_env_value(value: str) -> str:
+        """Le .env généré par Coolify entoure les valeurs de quotes simples
+        SANS échapper celles contenues dedans : une apostrophe dans la valeur
+        casse le parsing du .env et les conteneurs ne démarrent plus
+        (statut exited). On remplace par l'apostrophe typographique, et les
+        retours à la ligne par des espaces (non plus supportés par .env)."""
+        return value.replace("'", "’").replace("\r\n", " ").replace("\n", " ")
+
     def set_env(self, svc_uuid: str, key: str, value: str) -> None:
-        self._set_env(svc_uuid, key, value)
+        self._set_env(svc_uuid, key, self._sanitize_env_value(value))
 
     def _set_env(self, svc_uuid: str, key: str, value: str) -> None:
         """Set or update an environment variable on a service."""
