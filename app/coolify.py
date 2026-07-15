@@ -67,7 +67,8 @@ class CoolifyClient:
             headers=self._headers,
             timeout=self.timeout,
         )
-        if resp.status_code not in (200, 202):
+        # Coolify returns 200, 201, or 202 for successful PATCHes
+        if resp.status_code not in (200, 201, 202):
             raise RuntimeError(f"PATCH {path} → {resp.status_code}: {resp.text[:500]}")
         return resp.json() if resp.text else {}
 
