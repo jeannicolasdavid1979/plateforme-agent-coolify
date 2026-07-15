@@ -215,7 +215,10 @@ plateforme-agent-coolify/
 │   ├── provisioning.py   # ProvisioningEngine: deploy steps (async)
 │   ├── api.py            # REST routes: auth, agent CRUD, admin
 │   └── static/
-│       └── index.html    # Dashboard web (login, create agent, list)
+│       ├── index.html    # Dashboard web (design Hermes : hero, connexion, journal live)
+│       └── agent.webp    # Portrait officiel de l'agent Hermes (hero)
+├── design/
+│   └── DESIGN.md         # Système de direction artistique Hermes (palette, typo, motion)
 ├── tests/
 │   └── test_app.py       # 6 tests (health, auth, agents)
 ├── Dockerfile            # python:3.12-slim + deps
