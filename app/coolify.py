@@ -113,8 +113,9 @@ class CoolifyClient:
         logger.info("Service %s created (uuid=%s)", service_name, svc_uuid)
 
         # 2. Set environment variables
+        # hermes-agent reads the model from HERMES_MODEL (not HERMES_INSTANCE_MODEL)
         self._set_env(svc_uuid, "OPENROUTER_API_KEY", openrouter_api_key)
-        self._set_env(svc_uuid, "HERMES_INSTANCE_MODEL", model)
+        self._set_env(svc_uuid, "HERMES_MODEL", model)
         if system_prompt:
             self._set_env(svc_uuid, "HERMES_SYSTEM_PROMPT", system_prompt)
 
