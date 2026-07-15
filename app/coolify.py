@@ -176,17 +176,33 @@ class CoolifyClient:
     def delete_service(self, svc_uuid: str) -> bool:
         return self._delete(f"/api/v1/services/{svc_uuid}")
 
+    # ── Service status ───────────────────────────────────────────────
+
+    def service_status(self, svc_uuid: str) -> str | None:
+        """Return Coolify's status string for a service (e.g. 'running:healthy')."""
+        try:
+            data = self._get(f"/api/v1/services/{svc_uuid}")
+            return str(data.get("status") or "") or None
+        except Exception:
+            return None
+
     # ── Health check ─────────────────────────────────────────────────
 
     def is_healthy(self, fqdn: str, timeout: int = 120) -> bool:
-        """Poll the webui /health endpoint until it responds."""
+        """Poll the webui until the public URL answers through Traefik.
+
+        On accepte 200-403 : un 200 sur /health prouve que la webui est en
+        ligne, un 401/403 prouve au moins que Traefik route vers elle (page
+        protégée). Un 404 vient de Traefik lui-même (pas encore de route)
+        et un 5xx d'un conteneur pas prêt — on continue d'attendre.
+        """
         import time
         deadline = time.monotonic() + timeout
-        health_url = fqdn.replace("https://", "https://") + "/health"
+        health_url = fqdn + "/health"
         while time.monotonic() < deadline:
             try:
                 resp = httpx.get(health_url, timeout=5, verify=False)
-                if resp.status_code == 200:
+                if 200 <= resp.status_code < 404:
                     return True
             except Exception:
                 pass

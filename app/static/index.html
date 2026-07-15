@@ -67,10 +67,34 @@
   button.ghost { background:var(--surface); color:var(--text); border:1px solid var(--line); }
   button.ghost:hover { box-shadow:0 8px 24px rgba(0,0,0,0.35); }
 
+  button.danger { background:transparent; color:var(--bad); border:1px solid rgba(224,92,92,.4); }
+  button.danger:hover { background:rgba(224,92,92,.12); box-shadow:none; }
+
   .badge { display:inline-block; padding:3px 12px; border-radius:20px; font-size:12px; font-weight:600; }
   .badge.running { background:rgba(76,175,125,.12); color:var(--ok); }
   .badge.deploying, .badge.pending { background:rgba(92,157,224,.12); color:var(--run); }
   .badge.failed { background:rgba(224,92,92,.12); color:var(--bad); }
+  .badge.awaiting_payment { background:rgba(224,164,88,.12); color:var(--accent); }
+
+  /* Cadre lumineux : liseré ambre qui parcourt la carte en boucle pendant
+     le déploiement — la cinétique fait patienter. */
+  @property --spin { syntax:'<angle>'; inherits:false; initial-value:0deg; }
+  @keyframes borderSpin { to { --spin:360deg } }
+  .card.glow { position:relative; }
+  .card.glow::after {
+    content:""; position:absolute; inset:-1px; border-radius:14px; padding:1px;
+    background:conic-gradient(from var(--spin),
+      transparent 0 68%, rgba(224,164,88,.9) 84%, transparent 98%);
+    -webkit-mask:linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite:xor;
+    mask:linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    mask-composite:exclude;
+    animation:borderSpin 2.6s linear infinite; pointer-events:none;
+  }
+  @media (prefers-reduced-motion:reduce){
+    .card.glow::after { animation:none;
+      background:conic-gradient(from 0deg, transparent 0 68%, rgba(224,164,88,.5) 84%, transparent 98%); }
+  }
 
   ul.steps { list-style:none; margin-top:16px; min-height:168px; }
   ul.steps li { padding:4px 0; font-size:13px; color:var(--muted);
@@ -175,8 +199,33 @@
     </details>
     <div class="row" style="margin-top:16px">
       <button id="create-btn" onclick="createAgent()">Déployer mon agent</button>
+      <span id="create-credit" class="muted"></span>
     </div>
     <p id="create-msg"></p>
+  </section>
+
+  <!-- Section : Réglages business (admin) -->
+  <section id="settings" class="hidden">
+    <div class="eyebrow">Réglages business</div>
+    <h2>Vos prix, vos règles</h2>
+    <div class="grid" style="margin-top:24px">
+      <div class="card">
+        <div class="muted">Prix du déploiement (€)</div>
+        <input id="p-deploy" type="number" min="0" step="0.5">
+      </div>
+      <div class="card">
+        <div class="muted">Montant d'une recharge (€)</div>
+        <input id="p-topup" type="number" min="0" step="0.5">
+      </div>
+      <div class="card">
+        <div class="muted">Crédit IA offert au lancement (€)</div>
+        <input id="p-credit" type="number" min="0" step="0.5">
+      </div>
+    </div>
+    <div class="row" style="margin-top:16px">
+      <button class="ghost" onclick="savePricing()">Enregistrer les réglages</button>
+      <span id="pricing-msg" class="muted"></span>
+    </div>
   </section>
 
   <!-- Section : Journal live / flotte -->
@@ -209,7 +258,9 @@ const STEP_LABELS = {
   health_check: 'Vérification de santé',
   done: 'Agent en ligne',
 };
-const STATUS_LABELS = { pending: 'en attente', deploying: 'déploiement', running: 'en ligne', failed: 'échec' };
+const STATUS_LABELS = { awaiting_payment: 'à payer', pending: 'en attente', deploying: 'déploiement', running: 'en ligne', failed: 'échec' };
+let pricing = { deploy_price_eur: 0, topup_amount_eur: 0, initial_credit_eur: 0 };
+const eur = (n) => Number(n || 0).toFixed(2).replace('.', ',');
 
 function errorMessage(detail, fallback) {
   // FastAPI renvoie une chaîne pour nos erreurs métier, mais une LISTE
@@ -257,6 +308,32 @@ function slugify(s) {
           .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
 }
 
+async function loadPricing() {
+  try {
+    pricing = await api('/api/pricing');
+    $('create-btn').textContent = `Déployer mon agent — ${eur(pricing.deploy_price_eur)} €`;
+    $('create-credit').textContent = pricing.initial_credit_eur > 0
+      ? `${eur(pricing.initial_credit_eur)} € de crédit IA offerts au lancement`
+      : '';
+    $('p-deploy').value = pricing.deploy_price_eur;
+    $('p-topup').value = pricing.topup_amount_eur;
+    $('p-credit').value = pricing.initial_credit_eur;
+  } catch (e) { /* valeurs par défaut serveur */ }
+}
+
+async function savePricing() {
+  $('pricing-msg').textContent = '';
+  try {
+    pricing = await api('/api/admin/pricing', {method:'PUT', body: JSON.stringify({
+      deploy_price_eur: parseFloat($('p-deploy').value),
+      topup_amount_eur: parseFloat($('p-topup').value),
+      initial_credit_eur: parseFloat($('p-credit').value),
+    })});
+    $('pricing-msg').textContent = '✔ Réglages enregistrés';
+    loadPricing(); renderCachedTenants();
+  } catch (e) { $('pricing-msg').textContent = e.message; }
+}
+
 async function createAgent() {
   const btn = $('create-btn'), msg = $('create-msg');
   msg.className = ''; msg.textContent = '';
@@ -265,17 +342,15 @@ async function createAgent() {
   const subdomain = $('tsub').value.trim() || slugify(name);
   btn.disabled = true;
   try {
-    await api('/api/agents', {method:'POST', body: JSON.stringify({
+    const data = await api('/api/agents', {method:'POST', body: JSON.stringify({
       name, subdomain,
       model: $('tmodel').value,
       system_prompt: $('tprompt').value.trim(),
     })});
-    msg.className = 'ok';
-    msg.textContent = 'Déploiement lancé — suivez-le en direct ci-dessous.';
-    $('tname').value = ''; $('tsub').value = ''; $('tprompt').value = '';
-    loadTenants();
-  } catch (e) { msg.textContent = e.message; }
-  finally { btn.disabled = false; }
+    // Même parcours que Stripe Checkout : page de paiement hébergée, puis
+    // retour au dashboard où le déploiement se suit en direct.
+    location.href = data.checkout_url;
+  } catch (e) { msg.textContent = e.message; btn.disabled = false; }
 }
 
 function stepsHtml(job) {
@@ -286,45 +361,92 @@ function stepsHtml(job) {
 }
 
 function renderTenantCard(a, job) {
+  const esc = a.name.replace(/'/g, "\\'");
+  const del = `<button class="danger" onclick="destroy('${a.id}','${esc}')">Supprimer</button>`;
   let actions = '';
   if (a.status === 'running') {
     actions = `
       <div class="row fade-up" style="margin-top:16px">
         <button onclick="openChat('${a.id}')">Ouvrir mon agent</button>
         <button class="ghost" onclick="takeAway('${a.id}')">Emporter mon agent</button>
+        <button class="ghost" onclick="topup('${a.id}')">Recharger ${eur(pricing.topup_amount_eur)} €</button>
+        ${del}
       </div>`;
-  } else if (a.status === 'failed' && isAdmin) {
+  } else if (a.status === 'awaiting_payment') {
+    actions = `
+      <div class="row fade-up" style="margin-top:16px">
+        <button onclick="payNow('${a.id}')">Payer ${eur(pricing.deploy_price_eur)} € et déployer</button>
+        ${del}
+      </div>`;
+  } else if (a.status === 'failed') {
     actions = `<div class="row" style="margin-top:16px">
-      <button class="ghost" onclick="adminRedeploy('${a.id}')">Redéployer (admin)</button>
+      ${isAdmin ? `<button class="ghost" onclick="adminRedeploy('${a.id}')">Redéployer (admin)</button>` : ''}
+      ${del}
     </div>`;
   }
+  const deploying = ['pending', 'deploying'].includes(a.status);
   const url = a.url ? `<a href="${a.url}" target="_blank" rel="noopener">${a.url.replace('https://','')}</a>` : 'adresse en préparation';
   return `
-    <div class="card">
+    <div class="card${deploying ? ' glow' : ''}">
       <div class="row" style="justify-content:space-between">
         <strong>${a.name}</strong>
         <span class="badge ${a.status}">${STATUS_LABELS[a.status] || a.status}</span>
       </div>
-      <div class="muted" style="margin-top:8px">${url}<br>Modèle : ${a.model}</div>
-      ${stepsHtml(job)}
+      <div class="muted" style="margin-top:8px">${url}<br>
+        Modèle : ${a.model} — crédit IA : ${eur(a.balance_eur)} €</div>
+      ${a.status === 'awaiting_payment' ? '' : stepsHtml(job)}
       <div id="kit-${a.id}"></div>
       ${actions}
     </div>`;
 }
 
-async function loadTenants() {
-  let agents;
-  try { agents = (await api('/api/agents')).agents; }
-  catch (e) { return; }
-  // Journal live : les étapes du dernier job, pour chaque agent
-  const jobs = await Promise.all(agents.map(a =>
-    api(`/api/agents/${a.id}/jobs`).then(r => r.jobs[0] || null).catch(() => null)));
-  $('tenants').innerHTML = agents.length
-    ? agents.map((a, i) => renderTenantCard(a, jobs[i])).join('')
+let tenantsCache = [];
+let jobsCache = [];
+
+function renderCachedTenants() {
+  $('tenants').innerHTML = tenantsCache.length
+    ? tenantsCache.map((a, i) => renderTenantCard(a, jobsCache[i])).join('')
     : '<p class="muted">Aucun agent pour le moment — commandez le vôtre ci-dessus.</p>';
-  const active = agents.some(a => ['pending', 'deploying'].includes(a.status));
+}
+
+async function loadTenants() {
+  try { tenantsCache = (await api('/api/agents')).agents; }
+  catch (e) { return; }
+  // Journal live : les étapes du dernier job, pour chaque agent déjà payé
+  jobsCache = await Promise.all(tenantsCache.map(a =>
+    a.status === 'awaiting_payment' ? null
+    : api(`/api/agents/${a.id}/jobs`).then(r => r.jobs[0] || null).catch(() => null)));
+  renderCachedTenants();
+  const active = tenantsCache.some(a => ['pending', 'deploying'].includes(a.status));
   clearInterval(pollTimer);
   if (active) pollTimer = setInterval(loadTenants, 2500);
+}
+
+async function payNow(id) {
+  try {
+    const data = await api(`/api/agents/${id}/checkout`, {method:'POST'});
+    location.href = data.checkout_url;
+  } catch (e) { alert(e.message); }
+}
+
+async function topup(id) {
+  try {
+    const data = await api(`/api/agents/${id}/topup`, {method:'POST'});
+    location.href = data.checkout_url;
+  } catch (e) { alert(e.message); }
+}
+
+// Suppression : double garde-fou. 1) anti-fausse-manip. 2) rappel que c'est
+// irréversible, avec saisie du nom pour confirmer.
+async function destroy(id, name) {
+  if (!confirm(`Supprimer l'agent « ${name} » ?\n\nSes conteneurs Coolify seront arrêtés et détruits. Vérifiez que vous ne vous êtes pas trompé d'agent.`)) return;
+  const typed = prompt(`⚠️ DÉFINITIF ET NON REMBOURSABLE.\n\nCette suppression est irréversible : conteneurs, données et crédit restant seront perdus.\n\nPour confirmer, tapez le nom de l'agent : ${name}`);
+  if (typed === null) return;
+  if (typed.trim() !== name) { alert('Le nom ne correspond pas — suppression annulée.'); return; }
+  try {
+    await api(`/api/agents/${id}`, {method:'DELETE'});
+    loadTenants();
+  } catch (e) { alert(e.message); }
 }
 
 async function openChat(id) {
@@ -373,14 +495,17 @@ function refresh() {
   $('hero').classList.toggle('hidden', logged);
   $('shop').classList.toggle('hidden', !logged);
   $('fleet').classList.toggle('hidden', !logged);
+  $('settings').classList.add('hidden');
   $('logout').classList.toggle('hidden', !logged);
   $('who').textContent = email;
   if (logged) {
     api('/api/auth/me').then(me => {
       isAdmin = me.is_admin;
       $('who').textContent = email + (isAdmin ? ' · admin' : '');
+      $('settings').classList.toggle('hidden', !isAdmin);
+      if (isAdmin) renderCachedTenants();
     }).catch(() => {});
-    loadTenants();
+    loadPricing().then(loadTenants);
   }
 }
 refresh();

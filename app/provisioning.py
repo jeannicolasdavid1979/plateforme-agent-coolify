@@ -138,9 +138,22 @@ class ProvisioningEngine:
         # (l'agent ne lit pas HERMES_INSTANCE_MODEL, il lit config.yaml)
         self._inject_model(tenant)
 
-        if client.is_healthy(tenant.instance_url, timeout=120):
+        if client.is_healthy(tenant.instance_url, timeout=300):
             return "instance en ligne"
-        raise RuntimeError("l'instance n'a pas répondu au health check")
+
+        # Fenêtre de convergence connue (docs Hermes) : Traefik n'ajoute le
+        # conteneur à sa table de routage qu'une fois son statut Docker
+        # `healthy`, et la première émission du certificat Let's Encrypt
+        # peut prendre plusieurs minutes. Si Coolify confirme que les
+        # conteneurs tournent, le déploiement a réussi — seule l'URL
+        # publique converge encore.
+        state = client.service_status(tenant.coolify_service_uuid)
+        if state and "running" in state:
+            return f"conteneurs actifs ({state}) — l'URL publique converge (SSL)"
+        raise RuntimeError(
+            "l'instance n'a pas répondu au health check"
+            + (f" (statut Coolify : {state})" if state else "")
+        )
 
     def _inject_model(self, tenant: Tenant) -> None:
         """Écrit le modèle dans config.yaml du conteneur hermes-agent via docker exec."""

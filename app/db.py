@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
 from .models import Base
@@ -28,6 +28,14 @@ SessionFactory = sessionmaker(bind=engine, expire_on_commit=False)
 def init_db():
     """Create all tables. Call once at startup."""
     Base.metadata.create_all(engine)
+    # Migration légère pour les bases SQLite existantes : create_all ne
+    # rajoute pas de colonne à une table déjà créée.
+    with engine.connect() as conn:
+        try:
+            conn.execute(text("ALTER TABLE tenants ADD COLUMN balance_eur FLOAT NOT NULL DEFAULT 0"))
+            conn.commit()
+        except Exception:
+            conn.rollback()  # colonne déjà présente
 
 
 def get_db():

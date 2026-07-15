@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     plan_monthly_credits_eur: float = 20.0
     default_model: str = "openai/gpt-4o"
 
+    # Business — valeurs par défaut, modifiables par l'admin (table settings)
+    deploy_price_eur: float = 29.0
+    topup_amount_eur: float = 10.0
+    initial_credit_eur: float = 5.0
+
 
 @lru_cache
 def get_settings() -> Settings:

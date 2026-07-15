@@ -43,8 +43,9 @@ class Tenant(Base):
     subdomain: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     model: Mapped[str] = mapped_column(String(128), default="openai/gpt-4o")
     system_prompt: Mapped[str] = mapped_column(Text, default="")
-    status: Mapped[str] = mapped_column(String(32), default="pending")
-    # "pending" → "deploying" → "running" | "failed"
+    status: Mapped[str] = mapped_column(String(32), default="awaiting_payment")
+    # "awaiting_payment" → "pending" → "deploying" → "running" | "failed"
+    balance_eur: Mapped[float] = mapped_column(Float, default=0.0)
 
     coolify_service_uuid: Mapped[str | None] = mapped_column(String(64), nullable=True)
     instance_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -55,6 +56,30 @@ class Tenant(Base):
 
     owner: Mapped[User] = relationship(back_populates="tenants")
     jobs: Mapped[list["ProvisioningJob"]] = relationship(back_populates="tenant")
+
+
+class Setting(Base):
+    """Variables business modifiables par l'admin (prix, recharges, crédit)."""
+
+    __tablename__ = "settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(String(255))
+
+
+class Checkout(Base):
+    """Session de paiement simulée (même cycle de vie que Stripe Checkout)."""
+
+    __tablename__ = "checkouts"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id"))
+    kind: Mapped[str] = mapped_column(String(16))  # "deploy" | "topup"
+    amount_eur: Mapped[float] = mapped_column(Float)
+    credit_eur: Mapped[float] = mapped_column(Float, default=0.0)
+    status: Mapped[str] = mapped_column(String(16), default="pending")  # "pending" | "paid"
+    created_at: Mapped[datetime] = mapped_column(default=_now)
 
 
 class ProvisioningJob(Base):
