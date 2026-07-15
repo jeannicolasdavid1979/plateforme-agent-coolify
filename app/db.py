@@ -30,12 +30,18 @@ def init_db():
     Base.metadata.create_all(engine)
     # Migration légère pour les bases SQLite existantes : create_all ne
     # rajoute pas de colonne à une table déjà créée.
+    _MIGRATIONS = [
+        "ALTER TABLE tenants ADD COLUMN balance_eur FLOAT NOT NULL DEFAULT 0",
+        "ALTER TABLE tenants ADD COLUMN openrouter_api_key VARCHAR(255)",
+        "ALTER TABLE tenants ADD COLUMN openrouter_key_hash VARCHAR(128)",
+    ]
     with engine.connect() as conn:
-        try:
-            conn.execute(text("ALTER TABLE tenants ADD COLUMN balance_eur FLOAT NOT NULL DEFAULT 0"))
-            conn.commit()
-        except Exception:
-            conn.rollback()  # colonne déjà présente
+        for stmt in _MIGRATIONS:
+            try:
+                conn.execute(text(stmt))
+                conn.commit()
+            except Exception:
+                conn.rollback()  # colonne déjà présente
 
 
 def get_db():

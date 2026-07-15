@@ -13,11 +13,13 @@ from .config import get_settings
 from .coolify import get_client
 from .db import SessionFactory
 from .models import ProvisioningJob, Tenant
+from .openrouter import get_keys_client
 
 logger = logging.getLogger("provisioning")
 
 STEPS = [
     "deploy_service",
+    "create_api_key",
     "configure_env",
     "set_fqdn",
     "start_service",
@@ -71,17 +73,33 @@ def customize_compose(compose_yaml: str, fqdn_url: str) -> tuple[str | None, lis
 
         # 1. Domaine explicite sur les variables magiques de la webui
         env = svc.get("environment")
+        matched: list[str] = []
         if isinstance(env, list):
             for i, entry in enumerate(env):
                 key = str(entry).split("=", 1)[0].strip()
                 if _FQDN_KEY_RE.match(key):
                     env[i] = f"{key}={fqdn_url}"
-                    changes.append(f"{key} → {fqdn_url}")
+                    matched.append(key)
         elif isinstance(env, dict):
             for key in list(env):
                 if _FQDN_KEY_RE.match(str(key)):
                     env[key] = fqdn_url
-                    changes.append(f"{key} → {fqdn_url}")
+                    matched.append(str(key))
+        changes.extend(f"{k} → {fqdn_url}" for k in matched)
+
+        # Le template peut ne déclarer que SERVICE_URL_* (constaté en réel) :
+        # or c'est SERVICE_FQDN_* que le parseur Coolify lit pour générer le
+        # domaine. On l'ajoute alors explicitement, même suffixe de port.
+        url_keys = [k for k in matched if k.startswith("SERVICE_URL_")]
+        has_fqdn = any(k.startswith("SERVICE_FQDN_") for k in matched)
+        if url_keys and not has_fqdn:
+            suffix = url_keys[0].removeprefix("SERVICE_URL_HERMESWEBUI")
+            new_key = f"SERVICE_FQDN_HERMESWEBUI{suffix}"
+            if isinstance(env, list):
+                env.append(f"{new_key}={fqdn_url}")
+            elif isinstance(env, dict):
+                env[new_key] = fqdn_url
+            changes.append(f"{new_key} ajouté → {fqdn_url}")
 
         # 2. Entrypoint config.yaml sur le conteneur agent
         image = str(svc.get("image", ""))
@@ -177,13 +195,31 @@ class ProvisioningEngine:
         self.db.commit()
         return f"service {svc_uuid[:12]} → {tenant.instance_url}"
 
+    def _step_create_api_key(self, tenant: Tenant, job: ProvisioningJob) -> str:
+        """Une clé OpenRouter PAR AGENT, nommée et plafonnée au crédit payé —
+        sinon impossible de savoir quel client consomme quoi."""
+        keys = get_keys_client()
+        if not keys:
+            return "clé partagée utilisée (OPENROUTER_PROVISIONING_KEY non configurée)"
+        if tenant.openrouter_api_key:
+            return "clé dédiée existante réutilisée"
+
+        limit_usd = round((tenant.balance_eur or 0.0) * self.settings.eur_usd_rate, 2)
+        key, key_hash = keys.create(name=f"hermes-{tenant.subdomain}", limit_usd=limit_usd)
+        tenant.openrouter_api_key = key
+        tenant.openrouter_key_hash = key_hash
+        self.db.commit()
+        return f"clé hermes-{tenant.subdomain} créée — plafond {limit_usd:.2f} $"
+
     def _step_configure_env(self, tenant: Tenant, job: ProvisioningJob) -> str:
         client = get_client()
         svc_uuid = tenant.coolify_service_uuid
         fqdn_host = f"{tenant.subdomain}.{self.settings.base_domain}"
 
-        # hermes-agent lit le modèle dans HERMES_MODEL
-        client.set_env(svc_uuid, "OPENROUTER_API_KEY", self.settings.openrouter_api_key)
+        # hermes-agent lit le modèle dans HERMES_MODEL. Clé dédiée à l'agent
+        # si le provisioning OpenRouter est configuré, partagée sinon.
+        api_key = tenant.openrouter_api_key or self.settings.openrouter_api_key
+        client.set_env(svc_uuid, "OPENROUTER_API_KEY", api_key)
         client.set_env(svc_uuid, "HERMES_MODEL", tenant.model)
         if tenant.system_prompt:
             client.set_env(svc_uuid, "HERMES_SYSTEM_PROMPT", tenant.system_prompt)
@@ -238,14 +274,26 @@ class ProvisioningEngine:
                 f"les conteneurs ne démarrent pas (statut Coolify : {status or 'inconnu'})"
             )
 
-        # Vérité terrain : le domaine que Coolify a réellement retenu
+        # Vérité terrain : le domaine que Coolify a réellement retenu.
+        # S'il a gardé le sien (sslip.io), on ADOPTE cette adresse : l'agent
+        # doit être joignable tout de suite — le domaine personnalisé se
+        # règle ensuite dans Coolify (Domains) puis Redémarrer.
         want = tenant.instance_url.replace("https://", "")
         fqdns = client.service_fqdns(svc_uuid)
-        domain_note = (
-            f", domaine {want} appliqué" if any(want in f for f in fqdns)
-            else f", ATTENTION domaine retenu : {', '.join(fqdns) or 'aucun'}"
-        )
-        return f"conteneurs démarrés ({status}){domain_note}"
+        if any(want in f for f in fqdns):
+            return f"conteneurs démarrés ({status}), domaine {want} appliqué"
+        effective = next((f.strip() for f in fqdns if f and f.strip()), None)
+        if effective:
+            effective = re.sub(r":\d+$", "", effective)  # :8787 = port interne Coolify
+            if not effective.startswith("http"):
+                effective = f"http://{effective}"
+            tenant.instance_url = effective
+            self.db.commit()
+            return (
+                f"conteneurs démarrés ({status}) — domaine personnalisé non retenu "
+                f"par Coolify, adresse effective adoptée : {effective}"
+            )
+        return f"conteneurs démarrés ({status}), ATTENTION aucun domaine retenu"
 
     def _step_health_check(self, tenant: Tenant, job: ProvisioningJob) -> str:
         client = get_client()

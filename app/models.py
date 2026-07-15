@@ -51,6 +51,10 @@ class Tenant(Base):
     instance_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
     instance_password: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
+    # Clé OpenRouter dédiée (créée via la clé maître de provisioning)
+    openrouter_api_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    openrouter_key_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(default=_now)
     updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
 

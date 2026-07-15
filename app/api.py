@@ -13,6 +13,7 @@ from .config import get_settings
 from .coolify import get_client
 from .db import get_db
 from .models import Checkout, ProvisioningJob, Setting, Tenant, User
+from .openrouter import get_keys_client
 from .provisioning import ProvisioningEngine
 from .security import create_token, current_user, hash_password, require_admin, verify_password
 
@@ -125,8 +126,10 @@ def me(user: User = Depends(current_user)):
 
 @router.get("/api/agents")
 def list_agents(user: User = Depends(current_user), db: Session = Depends(get_db)):
+    # include_secrets : la liste ne renvoie que les agents de l'utilisateur,
+    # le mot de passe est affiché (masqué) sur sa carte avec bouton copier.
     agents = db.scalars(select(Tenant).where(Tenant.user_id == user.id)).all()
-    return {"agents": [_agent_dict(a) for a in agents]}
+    return {"agents": [_agent_dict(a, include_secrets=True) for a in agents]}
 
 
 @router.post("/api/agents")
@@ -174,7 +177,18 @@ def get_agent(agent_id: str, user: User = Depends(current_user), db: Session = D
     agent = db.get(Tenant, agent_id)
     if not agent or agent.user_id != user.id:
         raise HTTPException(404, "Agent non trouvé")
-    return _agent_dict(agent, include_secrets=True)
+    d = _agent_dict(agent, include_secrets=True)
+    # Consommation réelle de la clé OpenRouter dédiée (qui paye quoi)
+    if agent.openrouter_key_hash:
+        keys = get_keys_client()
+        if keys:
+            try:
+                info = keys.info(agent.openrouter_key_hash)
+                d["api_key_limit_usd"] = info.get("limit")
+                d["api_key_usage_usd"] = info.get("usage")
+            except Exception:
+                pass
+    return d
 
 
 @router.get("/api/agents/{agent_id}/jobs")
@@ -258,6 +272,23 @@ def pay(checkout_id: str, db: Session = Depends(get_db)):
         engine.run_job_async(job.id)
     else:
         db.commit()
+        # Recharge : relever le plafond de la clé OpenRouter dédiée du même
+        # montant — c'est elle qui matérialise le crédit du client.
+        if checkout.kind == "topup" and tenant.openrouter_key_hash:
+            keys = get_keys_client()
+            if keys:
+                from .config import get_settings
+                try:
+                    keys.add_credit(
+                        tenant.openrouter_key_hash,
+                        checkout.credit_eur * get_settings().eur_usd_rate,
+                    )
+                except Exception as exc:
+                    import logging
+                    logging.getLogger("api").warning(
+                        "Recharge OpenRouter échouée pour %s : %s — solde local crédité, "
+                        "relever le plafond manuellement", tenant.name, exc,
+                    )
     return {"status": "paid", "kind": checkout.kind, "credited_eur": checkout.credit_eur}
 
 
@@ -331,12 +362,35 @@ async function pay() {{
 # ── Suppression ──────────────────────────────────────────────────────
 
 
-@router.delete("/api/agents/{agent_id}")
-def delete_agent(agent_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    """Détruit l'agent : service Coolify (conteneurs, volumes) puis DB."""
+@router.post("/api/agents/{agent_id}/restart")
+def restart_agent(agent_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """Redémarre les conteneurs — utile après avoir réglé le domaine dans Coolify."""
     agent = db.get(Tenant, agent_id)
     if not agent or agent.user_id != user.id:
         raise HTTPException(404, "Agent non trouvé")
+    if not agent.coolify_service_uuid:
+        raise HTTPException(409, "Cet agent n'a pas encore de service Coolify")
+    client = get_client()
+    if not client:
+        raise HTTPException(503, "Coolify API non configurée")
+    if not client.restart_service(agent.coolify_service_uuid):
+        raise HTTPException(502, "Redémarrage refusé par Coolify")
+    return {"status": "restarting"}
+
+
+@router.delete("/api/agents/{agent_id}")
+def delete_agent(agent_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """Détruit l'agent : service Coolify (conteneurs, volumes), clé API, puis DB."""
+    agent = db.get(Tenant, agent_id)
+    if not agent or agent.user_id != user.id:
+        raise HTTPException(404, "Agent non trouvé")
+
+    # La clé OpenRouter dédiée part avec l'agent (le crédit restant est perdu,
+    # c'est annoncé dans la confirmation de suppression)
+    if agent.openrouter_key_hash:
+        keys = get_keys_client()
+        if keys:
+            keys.delete(agent.openrouter_key_hash)
 
     if agent.coolify_service_uuid:
         client = get_client()

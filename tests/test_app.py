@@ -208,6 +208,60 @@ services:
     assert patched is None
 
 
+def test_restart_requires_deployed_agent():
+    headers = _register("restart@example.com")
+    resp = client.post("/api/agents", json={"name": "R", "subdomain": "test-restart"}, headers=headers)
+    agent_id = resp.json()["agent"]["id"]
+    # Pas encore de service Coolify → 409
+    resp = client.post(f"/api/agents/{agent_id}/restart", headers=headers)
+    assert resp.status_code == 409
+
+
+def test_dedicated_api_key_step(monkeypatch):
+    """La clé OpenRouter dédiée est créée, nommée et plafonnée au crédit."""
+    from app import provisioning as prov
+    from app.db import SessionFactory
+    from app.models import Tenant, User
+
+    created = {}
+
+    class FakeKeys:
+        def create(self, name, limit_usd):
+            created.update(name=name, limit=limit_usd)
+            return "sk-or-v1-tenant-key", "hash123"
+
+    monkeypatch.setattr(prov, "get_keys_client", lambda: FakeKeys())
+
+    db = SessionFactory()
+    user = User(email="k@y.z", password_hash="h")
+    db.add(user); db.commit()
+    tenant = Tenant(user_id=user.id, name="Clé", subdomain="test-key",
+                    status="pending", balance_eur=5.0)
+    db.add(tenant); db.commit()
+
+    engine = prov.ProvisioningEngine(db)
+    detail = engine._step_create_api_key(tenant, None)
+    assert created == {"name": "hermes-test-key", "limit": 5.0}
+    assert tenant.openrouter_api_key == "sk-or-v1-tenant-key"
+    assert tenant.openrouter_key_hash == "hash123"
+    assert "hermes-test-key" in detail
+
+    # Redéploiement : la clé existante est réutilisée, pas recréée
+    created.clear()
+    detail = engine._step_create_api_key(tenant, None)
+    assert created == {} and "réutilisée" in detail
+    db.close()
+
+    # Sans clé maître : repli sur la clé partagée
+    monkeypatch.setattr(prov, "get_keys_client", lambda: None)
+    db = SessionFactory()
+    t2 = Tenant(user_id=user.id, name="P", subdomain="test-key2", status="pending")
+    db.add(t2); db.commit()
+    detail = prov.ProvisioningEngine(db)._step_create_api_key(t2, None)
+    assert "partagée" in detail and t2.openrouter_api_key is None
+    db.close()
+
+
 def test_delete_agent():
     headers = _register("deleter@example.com")
     resp = client.post("/api/agents", json={"name": "Éphémère", "subdomain": "test-del"}, headers=headers)

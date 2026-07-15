@@ -96,7 +96,31 @@
       background:conic-gradient(from 0deg, transparent 0 68%, rgba(224,164,88,.5) 84%, transparent 98%); }
   }
 
-  ul.steps { list-style:none; margin-top:16px; min-height:168px; }
+  button.mini { padding:4px 10px; font-size:12px; }
+
+  /* Accès agent : adresse + mot de passe masqué façon « poussière d'étoile »
+     (révélé au clic seulement — au cas où quelqu'un regarde l'écran) */
+  .access { margin-top:16px; display:grid; gap:8px; font-size:13px; }
+  .access code { color:var(--accent); font-size:13px; word-break:break-all; }
+  .spoiler { filter:blur(6px); cursor:pointer; user-select:none; color:var(--accent);
+             font-family:ui-monospace,SFMono-Regular,monospace; font-size:13px;
+             background:rgba(224,164,88,.10); border-radius:6px; padding:2px 8px;
+             transition:filter 250ms var(--ease); }
+  .spoiler.open { filter:none; user-select:text; }
+
+  /* Finalisation : le certificat SSL et Traefik convergent — chrono qui
+     fait patienter, une seule fois par agent. */
+  .finalize { margin-top:16px; }
+  .finalize .label { font-size:13px; color:var(--muted); }
+  .finalize .chrono { font-size:13px; color:var(--accent); font-variant-numeric:tabular-nums; }
+  .finalize .bar { height:6px; border-radius:9px; background:var(--surface); overflow:hidden; margin-top:8px; }
+  .finalize .fill { height:100%; background:var(--accent); transition:width 400ms linear; }
+  ul.finalize-steps { list-style:none; margin-top:12px; }
+  ul.finalize-steps li { padding:3px 0; font-size:13px; color:var(--muted); }
+  ul.finalize-steps li.pending::before { content:"· "; }
+  ul.finalize-steps li.done::before { content:"✔ "; color:var(--ok); }
+
+  ul.steps { list-style:none; margin-top:16px; min-height:196px; }
   ul.steps li { padding:4px 0; font-size:13px; color:var(--muted);
                 animation:fadeUp 400ms var(--ease) both; }
   ul.steps li.done::before { content:"✔ "; color:var(--ok); }
@@ -252,6 +276,7 @@ $('h1').innerHTML = TITLE.split(' ').map((w, i) =>
 // Libellés français des étapes du moteur de provisioning (app/provisioning.py)
 const STEP_LABELS = {
   deploy_service: 'Création du service Coolify (agent + interface)',
+  create_api_key: 'Création de la clé API dédiée (crédit du client)',
   configure_env: "Configuration de l'environnement",
   set_fqdn: 'Attribution du domaine sécurisé',
   start_service: 'Démarrage des conteneurs',
@@ -353,50 +378,110 @@ async function createAgent() {
   } catch (e) { msg.textContent = e.message; btn.disabled = false; }
 }
 
-function stepsHtml(job) {
+function stepsHtml(job, animate = true) {
   if (!job || !job.steps || !job.steps.length) return '<ul class="steps"></ul>';
+  // Sans animation une fois l'agent en ligne : le ticker de finalisation
+  // re-rend la carte toutes les 500ms et relancerait le fade-up en boucle.
+  const anim = (i) => animate ? `animation-delay:${i * 60}ms` : 'animation:none';
   return `<ul class="steps">
-    ${job.steps.map((s, i) => `<li class="${s.status}" style="animation-delay:${i * 60}ms">${STEP_LABELS[s.name] || s.name}${s.detail ? ' — ' + s.detail : ''}</li>`).join('')}
+    ${job.steps.map((s, i) => `<li class="${s.status}" style="${anim(i)}">${STEP_LABELS[s.name] || s.name}${s.detail ? ' — ' + s.detail : ''}</li>`).join('')}
   </ul>${job.error ? `<p class="muted" style="color:var(--bad)">${job.error}</p>` : ''}`;
 }
 
-function renderTenantCard(a, job) {
+// Finalisation théâtrale : après le passage « en ligne », le certificat SSL
+// et Traefik convergent encore ~1 min. Un chrono fait patienter — une seule
+// fois par agent, et seulement pour une mise en ligne vue en direct.
+const FINALIZE_MS = 60000;
+const FINALIZE_STEPS = [
+  'Activation du routage sécurisé',
+  'Émission du certificat SSL',
+  'Synchronisation réseau',
+  "Mise en ligne de l'agent",
+];
+const finalizeStarts = {};
+let finalizeTicker = null;
+let firstLoad = true;
+const isFinalized = (id) => localStorage.getItem('hermes_finalized_' + id) === '1';
+const markFinalized = (id) => localStorage.setItem('hermes_finalized_' + id, '1');
+
+function finalizeState(a) {
+  if (a.status !== 'running' || isFinalized(a.id)) return null;
+  if (!(a.id in finalizeStarts)) finalizeStarts[a.id] = Date.now();
+  const elapsed = Date.now() - finalizeStarts[a.id];
+  if (elapsed >= FINALIZE_MS) { markFinalized(a.id); return null; }
+  return {
+    pct: Math.min(100, elapsed / FINALIZE_MS * 100),
+    done: Math.min(FINALIZE_STEPS.length, Math.floor(elapsed / FINALIZE_MS * FINALIZE_STEPS.length)),
+    left: Math.ceil((FINALIZE_MS - elapsed) / 1000),
+  };
+}
+
+async function copyText(text, btn) {
+  try { await navigator.clipboard.writeText(text); } catch (e) {}
+  const old = btn.textContent;
+  btn.textContent = '✔';
+  setTimeout(() => { btn.textContent = old; }, 1200);
+}
+
+function renderTenantCard(a, job, fz) {
   const esc = a.name.replace(/'/g, "\\'");
   const del = `<button class="danger" onclick="destroy('${a.id}','${esc}')">Supprimer</button>`;
-  let actions = '';
-  if (a.status === 'running') {
-    actions = `
+  let body = '';
+  if (a.status === 'running' && fz) {
+    const mm = Math.floor(fz.left / 60), ss = String(fz.left % 60).padStart(2, '0');
+    body = `
+      <div class="finalize">
+        <div class="row" style="justify-content:space-between">
+          <span class="label">Finalisation — certificat SSL &amp; routage</span>
+          <span class="chrono">${mm}:${ss}</span>
+        </div>
+        <div class="bar"><div class="fill" style="width:${fz.pct}%"></div></div>
+        <ul class="finalize-steps">
+          ${FINALIZE_STEPS.map((s, i) => `<li class="${i < fz.done ? 'done' : 'pending'}">${s}</li>`).join('')}
+        </ul>
+      </div>`;
+  } else if (a.status === 'running') {
+    const pwd = a.password || '';
+    body = `
+      <div class="access fade-up">
+        <div class="row"><span class="muted">Adresse</span>
+          <code>${a.url ? a.url.replace(/^https?:\/\//, '') : '—'}</code>
+          <button class="ghost mini" onclick="copyText('${a.url}', this)">Copier</button></div>
+        <div class="row"><span class="muted">Mot de passe</span>
+          <span class="spoiler" onclick="this.classList.toggle('open')" title="Cliquer pour révéler">${pwd || '—'}</span>
+          ${pwd ? `<button class="ghost mini" onclick="copyText('${pwd}', this)">Copier</button>` : ''}</div>
+      </div>
       <div class="row fade-up" style="margin-top:16px">
-        <button onclick="openChat('${a.id}')">Ouvrir mon agent</button>
-        <button class="ghost" onclick="takeAway('${a.id}')">Emporter mon agent</button>
+        <button onclick="window.open('${a.url}', '_blank')">Ouvrir mon agent</button>
+        <button class="ghost" onclick="restartAgent('${a.id}')">Redémarrer</button>
         <button class="ghost" onclick="topup('${a.id}')">Recharger ${eur(pricing.topup_amount_eur)} €</button>
         ${del}
       </div>`;
   } else if (a.status === 'awaiting_payment') {
-    actions = `
+    body = `
       <div class="row fade-up" style="margin-top:16px">
         <button onclick="payNow('${a.id}')">Payer ${eur(pricing.deploy_price_eur)} € et déployer</button>
         ${del}
       </div>`;
   } else if (a.status === 'failed') {
-    actions = `<div class="row" style="margin-top:16px">
+    body = `<div class="row" style="margin-top:16px">
       ${isAdmin ? `<button class="ghost" onclick="adminRedeploy('${a.id}')">Redéployer (admin)</button>` : ''}
       ${del}
     </div>`;
   }
   const deploying = ['pending', 'deploying'].includes(a.status);
-  const url = a.url ? `<a href="${a.url}" target="_blank" rel="noopener">${a.url.replace('https://','')}</a>` : 'adresse en préparation';
+  const urlLine = a.status === 'running' ? ''
+    : (a.url ? `<a href="${a.url}" target="_blank" rel="noopener">${a.url.replace(/^https?:\/\//, '')}</a><br>` : 'adresse en préparation<br>');
   return `
     <div class="card${deploying ? ' glow' : ''}">
       <div class="row" style="justify-content:space-between">
         <strong>${a.name}</strong>
         <span class="badge ${a.status}">${STATUS_LABELS[a.status] || a.status}</span>
       </div>
-      <div class="muted" style="margin-top:8px">${url}<br>
+      <div class="muted" style="margin-top:8px">${urlLine}
         Modèle : ${a.model} — crédit IA : ${eur(a.balance_eur)} €</div>
-      ${a.status === 'awaiting_payment' ? '' : stepsHtml(job)}
-      <div id="kit-${a.id}"></div>
-      ${actions}
+      ${a.status === 'awaiting_payment' ? '' : stepsHtml(job, a.status !== 'running')}
+      ${body}
     </div>`;
 }
 
@@ -404,14 +489,23 @@ let tenantsCache = [];
 let jobsCache = [];
 
 function renderCachedTenants() {
+  const states = tenantsCache.map(finalizeState);
   $('tenants').innerHTML = tenantsCache.length
-    ? tenantsCache.map((a, i) => renderTenantCard(a, jobsCache[i])).join('')
+    ? tenantsCache.map((a, i) => renderTenantCard(a, jobsCache[i], states[i])).join('')
     : '<p class="muted">Aucun agent pour le moment — commandez le vôtre ci-dessus.</p>';
+  clearInterval(finalizeTicker);
+  if (states.some(Boolean)) finalizeTicker = setInterval(renderCachedTenants, 500);
 }
 
 async function loadTenants() {
   try { tenantsCache = (await api('/api/agents')).agents; }
   catch (e) { return; }
+  // Les agents déjà en ligne à l'arrivée sur la page ne rejouent pas la
+  // finalisation — elle n'accompagne que les mises en ligne vues en direct.
+  if (firstLoad) {
+    tenantsCache.filter(a => a.status === 'running').forEach(a => markFinalized(a.id));
+    firstLoad = false;
+  }
   // Journal live : les étapes du dernier job, pour chaque agent déjà payé
   jobsCache = await Promise.all(tenantsCache.map(a =>
     a.status === 'awaiting_payment' ? null
@@ -420,6 +514,14 @@ async function loadTenants() {
   const active = tenantsCache.some(a => ['pending', 'deploying'].includes(a.status));
   clearInterval(pollTimer);
   if (active) pollTimer = setInterval(loadTenants, 2500);
+}
+
+async function restartAgent(id) {
+  if (!confirm("Redémarrer les conteneurs de cet agent ?\n\nIl sera indisponible quelques secondes ; ses conversations sont conservées.")) return;
+  try {
+    await api(`/api/agents/${id}/restart`, {method:'POST'});
+    alert("Redémarrage lancé — l'agent revient dans une trentaine de secondes.");
+  } catch (e) { alert(e.message); }
 }
 
 async function payNow(id) {

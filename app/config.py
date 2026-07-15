@@ -26,7 +26,9 @@ class Settings(BaseSettings):
     coolify_destination_uuid: str = "xl2ufkvx4pjnjpj8hgsoq9wd"
 
     # LLM
-    openrouter_api_key: str = ""
+    openrouter_api_key: str = ""  # clé partagée — repli si pas de provisioning
+    openrouter_provisioning_key: str = ""  # clé maître : crée les clés par agent
+    eur_usd_rate: float = 1.0  # conversion crédit € → plafond $ OpenRouter
     base_domain: str = "kechlab.com"
 
     # Plan
