@@ -138,19 +138,25 @@ def create_agent(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ):
-    # Validate subdomain (alphanumeric + hyphens only)
-    if not re.match(r"^[a-z0-9-]+$", body.subdomain):
-        raise HTTPException(400, "Le sous-domaine ne doit contenir que des lettres, chiffres et tirets")
+    # Un domaine DNS est insensible à la casse : on normalise en minuscules
+    # au lieu de rejeter une majuscule sans explication.
+    subdomain = body.subdomain.strip().lower()
+    if not re.match(r"^[a-z0-9-]+$", subdomain):
+        raise HTTPException(
+            400,
+            "Le sous-domaine ne peut contenir que des lettres minuscules, "
+            "des chiffres et des tirets (ex. : mon-agent)",
+        )
 
     # Check uniqueness
-    if db.scalar(select(Tenant).where(Tenant.subdomain == body.subdomain)):
+    if db.scalar(select(Tenant).where(Tenant.subdomain == subdomain)):
         raise HTTPException(409, "Ce sous-domaine est déjà pris")
 
     # Create the tenant — le déploiement ne démarre qu'après paiement
     tenant = Tenant(
         user_id=user.id,
         name=body.name,
-        subdomain=body.subdomain,
+        subdomain=subdomain,
         model=body.model,
         system_prompt=body.system_prompt or f"Tu es {body.name}, l'agent IA personnel de ton propriétaire.",
         status="awaiting_payment",

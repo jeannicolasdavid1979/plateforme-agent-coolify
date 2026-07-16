@@ -364,7 +364,9 @@ async function createAgent() {
   msg.className = ''; msg.textContent = '';
   const name = $('tname').value.trim();
   if (!name) { msg.textContent = "Donnez un nom à votre agent."; return; }
-  const subdomain = $('tsub').value.trim() || slugify(name);
+  // slugify aussi la saisie manuelle : "Mon Agent" → "mon-agent" au lieu
+  // d'un rejet serveur incompréhensible (majuscules, accents, espaces).
+  const subdomain = slugify($('tsub').value.trim()) || slugify(name);
   btn.disabled = true;
   try {
     const data = await api('/api/agents', {method:'POST', body: JSON.stringify({

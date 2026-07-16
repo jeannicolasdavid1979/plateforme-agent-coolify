@@ -315,6 +315,20 @@ def test_template_probe_cached_and_compose_creation(monkeypatch):
     db.close()
 
 
+def test_subdomain_uppercase_is_normalized():
+    """Une majuscule ne doit pas provoquer un rejet obscur : DNS est
+    insensible à la casse, on normalise en minuscules côté serveur."""
+    headers = _register("caps@example.com")
+    resp = client.post("/api/agents", json={"name": "Caps", "subdomain": "Mon-Agent"}, headers=headers)
+    assert resp.status_code == 200
+    assert resp.json()["agent"]["subdomain"] == "mon-agent"
+
+    # Les caractères vraiment invalides restent refusés, avec un message clair
+    resp = client.post("/api/agents", json={"name": "Bad", "subdomain": "mon agent!"}, headers=headers)
+    assert resp.status_code == 400
+    assert "minuscules" in resp.json()["detail"]
+
+
 def test_delete_agent():
     headers = _register("deleter@example.com")
     resp = client.post("/api/agents", json={"name": "Éphémère", "subdomain": "test-del"}, headers=headers)
