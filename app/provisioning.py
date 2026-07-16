@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from .config import get_settings
 from .coolify import get_client
 from .db import SessionFactory
-from .models import ProvisioningJob, Tenant
+from .models import ProvisioningJob, Setting, Tenant
 from .openrouter import get_keys_client
 
 logger = logging.getLogger("provisioning")
@@ -183,17 +183,62 @@ class ProvisioningEngine:
 
     # ── Steps ────────────────────────────────────────────────────────
 
+    TEMPLATE_CACHE_KEY = "coolify_template_compose"
+
+    def _get_template_compose(self, client) -> str | None:
+        """Le compose du template hermes-agent-with-webui, sondé UNE fois :
+        service jetable créé depuis le template → compose lu → service
+        supprimé → YAML mis en cache en DB (table settings)."""
+        row = self.db.get(Setting, self.TEMPLATE_CACHE_KEY)
+        if row and row.value.strip():
+            return row.value
+        import uuid as _uuid
+        probe_uuid = None
+        try:
+            probe_uuid = client.create_service(f"hermes-probe-{_uuid.uuid4().hex[:8]}")
+            compose = client.get_compose_raw(probe_uuid)
+            if compose and "services" in compose:
+                self.db.merge(Setting(key=self.TEMPLATE_CACHE_KEY, value=compose))
+                self.db.commit()
+                return compose
+        except Exception as exc:
+            logger.warning("Sonde du template échouée : %s", exc)
+        finally:
+            if probe_uuid:
+                try:
+                    client.delete_service(probe_uuid)
+                except Exception:
+                    logger.warning("Service sonde %s non supprimé — à nettoyer dans Coolify", probe_uuid)
+        return None
+
     def _step_deploy_service(self, tenant: Tenant, job: ProvisioningJob) -> str:
         client = get_client()
         if not client:
             raise RuntimeError("Coolify API non configurée")
 
-        svc_uuid = client.create_service(f"hermes-{tenant.subdomain}")
+        fqdn_url = f"https://{tenant.subdomain}.{self.settings.base_domain}"
+        svc_name = f"hermes-{tenant.subdomain}"
+
+        # Voie royale : créer le service avec notre compose, domaine du client
+        # déjà inscrit — le premier parse de Coolify l'enregistre tel quel.
+        svc_uuid, how = None, ""
+        template = self._get_template_compose(client)
+        if template:
+            patched, _changes = customize_compose(template, fqdn_url)
+            if patched:
+                svc_uuid = client.create_service_from_compose(svc_name, patched)
+                how = " (compose personnalisé, domaine intégré)"
+
+        # Repli : création depuis le template, domaine tenté ensuite
+        if not svc_uuid:
+            svc_uuid = client.create_service(svc_name)
+            how = " (template Coolify, domaine appliqué ensuite)"
+
         tenant.coolify_service_uuid = svc_uuid
-        tenant.instance_url = f"https://{tenant.subdomain}.{self.settings.base_domain}"
+        tenant.instance_url = fqdn_url
         tenant.instance_password = client.get_password(svc_uuid)
         self.db.commit()
-        return f"service {svc_uuid[:12]} → {tenant.instance_url}"
+        return f"service {svc_uuid[:12]} → {fqdn_url}{how}"
 
     def _step_create_api_key(self, tenant: Tenant, job: ProvisioningJob) -> str:
         """Une clé OpenRouter PAR AGENT, nommée et plafonnée au crédit payé —
@@ -240,6 +285,9 @@ class ProvisioningEngine:
         # le déploiement qui suit re-parse le tout.
         details: list[str] = []
         compose = client.get_compose_raw(svc_uuid)
+        if compose and f"={tenant.instance_url}" in compose:
+            # Service créé avec notre compose : le domaine y est déjà.
+            return "domaine intégré au compose dès la création"
         if compose:
             patched, changes = customize_compose(compose, tenant.instance_url)
             if patched and client.update_compose_raw(svc_uuid, patched):

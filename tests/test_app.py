@@ -262,6 +262,59 @@ def test_dedicated_api_key_step(monkeypatch):
     db.close()
 
 
+def test_template_probe_cached_and_compose_creation(monkeypatch):
+    """Le template est sondé une seule fois, puis chaque service est créé
+    avec le compose personnalisé (domaine intégré dès le premier parse)."""
+    from app import provisioning as prov
+    from app.db import SessionFactory
+    from app.models import Setting, Tenant, User
+
+    TEMPLATE = (
+        "services:\n"
+        "  hermes-agent:\n    image: nousresearch/hermes-agent\n"
+        "  hermes-webui:\n    image: ghcr.io/nesquena/hermes-webui\n"
+        "    environment:\n      - SERVICE_URL_HERMESWEBUI_8787\n"
+    )
+    calls = {"probes": 0, "compose_creates": []}
+
+    class FakeClient:
+        def create_service(self, name):
+            calls["probes"] += 1
+            return "probe000000000ab"
+        def get_compose_raw(self, u): return TEMPLATE
+        def delete_service(self, u): return True
+        def create_service_from_compose(self, name, compose_yaml):
+            calls["compose_creates"].append((name, compose_yaml))
+            return "real000000000abc"
+        def get_password(self, u): return "pwd"
+
+    db = SessionFactory()
+    user = User(email="tpl@y.z", password_hash="h")
+    db.add(user); db.commit()
+    tenant = Tenant(user_id=user.id, name="T", subdomain="test-tpl", status="pending")
+    db.add(tenant); db.commit()
+
+    monkeypatch.setattr(prov, "get_client", lambda: FakeClient())
+    engine = prov.ProvisioningEngine(db)
+    detail = engine._step_deploy_service(tenant, None)
+
+    assert "compose personnalisé" in detail
+    name, compose = calls["compose_creates"][0]
+    assert name == "hermes-test-tpl"
+    assert "SERVICE_FQDN_HERMESWEBUI_8787=https://test-tpl.kechlab.com" in compose
+    assert tenant.coolify_service_uuid == "real000000000abc"
+    # La sonde a tourné une fois et le template est en cache
+    assert calls["probes"] == 1
+    assert db.get(Setting, engine.TEMPLATE_CACHE_KEY) is not None
+
+    # Deuxième déploiement : plus de sonde (cache)
+    t2 = Tenant(user_id=user.id, name="T2", subdomain="test-tpl2", status="pending")
+    db.add(t2); db.commit()
+    engine._step_deploy_service(t2, None)
+    assert calls["probes"] == 1
+    db.close()
+
+
 def test_delete_agent():
     headers = _register("deleter@example.com")
     resp = client.post("/api/agents", json={"name": "Éphémère", "subdomain": "test-del"}, headers=headers)

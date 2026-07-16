@@ -63,12 +63,13 @@ class Tenant(Base):
 
 
 class Setting(Base):
-    """Variables business modifiables par l'admin (prix, recharges, crédit)."""
+    """Variables business modifiables par l'admin (prix, recharges, crédit)
+    et petites données de plateforme (cache du compose template Coolify)."""
 
     __tablename__ = "settings"
 
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
-    value: Mapped[str] = mapped_column(String(255))
+    value: Mapped[str] = mapped_column(Text)
 
 
 class Checkout(Base):

@@ -89,6 +89,28 @@ class CoolifyClient:
         logger.info("Service %s created (uuid=%s)", name, svc_uuid)
         return svc_uuid
 
+    def create_service_from_compose(self, name: str, compose_yaml: str) -> str | None:
+        """Crée le service avec NOTRE compose — le domaine du client y est déjà
+        inscrit, donc le PREMIER parse de Coolify l'enregistre directement.
+        (Modifier le domaine après coup est refusé par l'API : le fqdn se fige
+        au premier parse.) Retourne None si l'API refuse ce mode de création."""
+        import base64
+        try:
+            created = self._post("/api/v1/services", {
+                "project_uuid": self.project_uuid,
+                "environment_name": self.environment_name,
+                "server_uuid": self.server_uuid,
+                "destination_uuid": self.destination_uuid,
+                "name": name,
+                "docker_compose_raw": base64.b64encode(compose_yaml.encode("utf-8")).decode("ascii"),
+            })
+            uuid = created.get("uuid")
+            logger.info("Service %s créé depuis compose personnalisé (uuid=%s)", name, uuid)
+            return uuid
+        except RuntimeError as exc:
+            logger.warning("Création par compose refusée : %s", exc)
+            return None
+
     def get_service(self, svc_uuid: str) -> dict:
         data = self._get(f"/api/v1/services/{svc_uuid}")
         return data if isinstance(data, dict) else {}
