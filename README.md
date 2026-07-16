@@ -155,6 +155,8 @@ Configurées dans Coolify → Application → Environment :
 | `EUR_USD_RATE` | Conversion crédit € → plafond $ OpenRouter | `1.0` |
 | `SERVICE_FEE_RATE` | Frais de service sur les recharges (`0.10` = +10 %) | `0.10` |
 | `STRIPE_WEBHOOK_SECRET` | Secret de signature du webhook Stripe (vérifie les événements) | `whsec_...` |
+| `SMTP_HOST`·`SMTP_PORT`·`SMTP_USER`·`SMTP_PASSWORD`·`SMTP_FROM` | Envoi des e-mails (vérification, reset). Sans `SMTP_HOST` : liens journalisés | `smtp.example.com` |
+| `PUBLIC_BASE_URL` | Base des liens dans les e-mails (défaut : `site_url`) | `https://plateformehermes.kechlab.com` |
 | `DATABASE_URL` | Emplacement de la base (défaut : volume persistant) | `sqlite:////app/data/orchestrator.db` |
 | `JWT_SECRET` | Secret pour les JWT | `HermesPlatformSecret2026!Kechlab` |
 | `ADMIN_EMAILS` | Emails admin (séparés par virgules) | `david.jn@orange.fr` |
@@ -233,6 +235,27 @@ Les abonnements auto-débités sont prolongés via `invoice.paid`.
 - **Sans lien configuré**, la plateforme retombe sur la **page de paiement
   simulée** — tout reste fonctionnel pour tester avant de brancher Stripe.
 
+### Flotte admin, codes promo, e-mails
+
+- **Flotte (admin)** : dans *Réglages business*, la section **« Flotte — tous les
+  agents »** liste **tous** les agents de tous les clients (email du
+  propriétaire, état d'hébergement + chrono, crédit) avec actions **Suspendre**,
+  **Restaurer**, **+1 mois offert** et **Supprimer**. Bouton **Lancer le balayage**
+  pour appliquer le cycle de vie à la demande.
+- **Codes promo** : remise en **%** ou en **montant**, sur un périmètre
+  (tout / déploiement / recharge / hébergement), avec **usages max** et **date
+  d'expiration** facultatifs. Le client saisit le code dans le champ *Code promo*
+  du tableau de bord ; la remise s'applique au **montant payé** (le crédit IA
+  reçu ne change pas) et le compteur d'usage s'incrémente au paiement.
+  > Note Stripe : les Payment Links ont un prix fixe. Les codes promo internes
+  > réduisent le montant de la **page de paiement simulée** ; pour une remise
+  > côté Stripe, activez les *promotion codes* Stripe sur le lien.
+- **Vérification d'e-mail & mot de passe oublié** : à l'inscription, un lien de
+  vérification est **envoyé** (SMTP) ou **journalisé** (repli sans SMTP) ; un
+  bandeau invite à confirmer, avec renvoi. La page de connexion propose
+  **« Mot de passe oublié ? »** → e-mail avec lien vers `/reset-password`.
+  **Configurez le SMTP** (`SMTP_*`) pour un envoi réel en production.
+
 ### Persistance des données (profils, agents, crédits)
 
 La base SQLite vit dans `/app/data/orchestrator.db` (chemin absolu défini par
@@ -278,6 +301,10 @@ colonnes** (jamais de perte).
 | `POST` | `/api/agents/{id}/topup` | Recharger le crédit (montant au choix : 5/10/20/50/100 €) |
 | `POST` | `/api/agents/{id}/hosting` | Souscrire/renouveler l'hébergement (mensuel ou annuel) |
 | `POST` | `/api/stripe/webhook` | Webhook Stripe (crédite après paiement) |
+| `GET` | `/api/auth/verify` | Vérifier l'e-mail depuis le lien reçu |
+| `POST` | `/api/auth/resend-verification` | Renvoyer l'e-mail de vérification |
+| `POST` | `/api/auth/forgot` · `/api/auth/reset` | Mot de passe oublié / réinitialisation |
+| `POST` | `/api/promo/validate` | Prévisualiser la remise d'un code promo |
 | `POST` | `/api/agents/{id}/restart` | Redémarrer les conteneurs |
 | `DELETE` | `/api/agents/{id}` | Supprimer un agent |
 | `GET` | `/api/pricing` | Prix et montants de recharge proposés |
@@ -288,7 +315,10 @@ colonnes** (jamais de perte).
 | `PUT` | `/api/admin/pricing` | Modifier prix, frais, hébergement, montants (admin) |
 | `GET`·`PUT` | `/api/admin/stripe` | Consulter/enregistrer les liens de paiement Stripe (admin) |
 | `POST` | `/api/admin/agents/{id}/redeploy` | Redéployer un agent (admin) |
-| `POST` | `/api/admin/agents/{id}/restore` | Restaurer un agent suspendu (admin) |
+| `POST` | `/api/admin/agents/{id}/suspend`·`/restore` | Suspendre / restaurer un agent (admin) |
+| `POST` | `/api/admin/agents/{id}/extend` | Offrir du temps d'hébergement (admin) |
+| `DELETE` | `/api/admin/agents/{id}` | Supprimer n'importe quel agent (admin) |
+| `GET`·`POST`·`DELETE` | `/api/admin/promos` | Gérer les codes promo (admin) |
 | `POST` | `/api/admin/enforce-hosting` | Déclencher le balayage du cycle de vie (admin) |
 
 ## Flow de déploiement d'un agent

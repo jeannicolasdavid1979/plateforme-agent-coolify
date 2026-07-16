@@ -3,6 +3,27 @@
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/).
 Les dates suivent l'ordre de développement.
 
+## [Non publié] — Flotte admin, codes promo, e-mails (vérif. & reset)
+
+### Ajouté
+- **Vue admin « Flotte — tous les agents »** : liste tous les agents de tous les
+  clients (email propriétaire, état d'hébergement + chrono, crédit) avec
+  **Suspendre / Restaurer / +1 mois offert / Supprimer** et déclenchement manuel
+  du balayage. Endpoints `POST /api/admin/agents/{id}/suspend|extend`,
+  `DELETE /api/admin/agents/{id}`, email propriétaire dans la liste admin.
+- **Codes promo** (`PromoCode`) : remise en % ou en montant, par périmètre
+  (all/deploy/topup/hosting), avec usages max et expiration. Appliqués au montant
+  payé (crédit inchangé), compteur incrémenté au paiement. Champ *Code promo*
+  côté client, admin CRUD (`/api/admin/promos`), prévisualisation
+  (`/api/promo/validate`). Remise affichée sur la page de paiement.
+- **Vérification d'e-mail** : token à l'inscription, `GET /api/auth/verify`,
+  bandeau + renvoi (`/api/auth/resend-verification`), `email_verified` exposé.
+- **Réinitialisation de mot de passe** : `POST /api/auth/forgot` (anti-énumération)
+  → e-mail avec lien vers la page `/reset-password` → `POST /api/auth/reset`
+  (token 1 h). Lien « Mot de passe oublié ? » sur la connexion.
+- **Mailer** (`mailer.py`) : envoi SMTP si configuré (`SMTP_*`), sinon lien
+  journalisé (repli dev). `PUBLIC_BASE_URL` pour les liens des e-mails.
+
 ## [Non publié] — Admin en cartes produit & offres d'hébergement clarifiées
 
 ### Ajouté / modifié

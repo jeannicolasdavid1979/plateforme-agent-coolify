@@ -29,6 +29,12 @@ class User(Base):
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(default=_now)
 
+    # Vérification d'e-mail & réinitialisation de mot de passe
+    email_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    verification_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    reset_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    reset_expires: Mapped[datetime | None] = mapped_column(nullable=True)
+
     # RGPD — preuve du consentement aux CGV/politique de confidentialité,
     # recueilli à l'inscription (base légale : exécution du contrat + consentement).
     consent_at: Mapped[datetime | None] = mapped_column(nullable=True)
@@ -98,9 +104,27 @@ class Checkout(Base):
     kind: Mapped[str] = mapped_column(String(16))  # "deploy" | "topup" | "hosting"
     # Pour un checkout d'hébergement : manual | sub_monthly | sub_annual
     plan: Mapped[str | None] = mapped_column(String(16), nullable=True)
-    amount_eur: Mapped[float] = mapped_column(Float)
+    amount_eur: Mapped[float] = mapped_column(Float)          # à payer (remise déduite)
     credit_eur: Mapped[float] = mapped_column(Float, default=0.0)
+    promo_code: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    discount_eur: Mapped[float] = mapped_column(Float, default=0.0)
     status: Mapped[str] = mapped_column(String(16), default="pending")  # "pending" | "paid"
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+
+
+class PromoCode(Base):
+    """Code promo appliquant une remise (en % ou en montant) sur un paiement."""
+
+    __tablename__ = "promo_codes"
+
+    code: Mapped[str] = mapped_column(String(32), primary_key=True)  # stocké en MAJUSCULES
+    kind: Mapped[str] = mapped_column(String(8))     # "percent" | "amount"
+    value: Mapped[float] = mapped_column(Float)      # 20 => -20% ou -20 €
+    scope: Mapped[str] = mapped_column(String(16), default="all")  # all|deploy|topup|hosting
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    max_uses: Mapped[int | None] = mapped_column(Integer, nullable=True)  # None = illimité
+    used_count: Mapped[int] = mapped_column(Integer, default=0)
+    expires_at: Mapped[datetime | None] = mapped_column(nullable=True)
     created_at: Mapped[datetime] = mapped_column(default=_now)
 
 

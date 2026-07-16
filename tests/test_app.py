@@ -1031,3 +1031,132 @@ def test_stripe_webhook_bad_signature_rejected(monkeypatch):
         assert resp.status_code == 400
     finally:
         get_settings().stripe_webhook_secret = ""
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  Flotte admin, codes promo, vérification e-mail & reset mot de passe
+# ══════════════════════════════════════════════════════════════════════
+
+def test_email_verification_flow():
+    from sqlalchemy import select
+    from app.db import SessionFactory
+    from app.models import User
+
+    r = client.post("/api/auth/register",
+                    json={"email": "verify@ex.io", "password": "secret123", "accept_terms": True})
+    assert r.json()["email_verified"] is False
+    headers = {"Authorization": f"Bearer {r.json()['token']}"}
+    assert client.get("/api/auth/me", headers=headers).json()["email_verified"] is False
+
+    db = SessionFactory()
+    tok = db.scalar(select(User).where(User.email == "verify@ex.io")).verification_token
+    db.close()
+    assert tok
+    # Le lien de vérification confirme l'adresse
+    assert client.get(f"/api/auth/verify?token={tok}").status_code == 200
+    assert client.get("/api/auth/me", headers=headers).json()["email_verified"] is True
+    # Jeton invalide → 400
+    assert client.get("/api/auth/verify?token=nope").status_code == 400
+
+
+def test_password_reset_flow():
+    from sqlalchemy import select
+    from app.db import SessionFactory
+    from app.models import User
+
+    client.post("/api/auth/register",
+                json={"email": "reset@ex.io", "password": "oldpass12", "accept_terms": True})
+    # Demande de reset (réponse 200 même si compte inconnu)
+    assert client.post("/api/auth/forgot", json={"email": "reset@ex.io"}).status_code == 200
+    assert client.post("/api/auth/forgot", json={"email": "ghost@ex.io"}).status_code == 200
+
+    db = SessionFactory()
+    tok = db.scalar(select(User).where(User.email == "reset@ex.io")).reset_token
+    db.close()
+    assert tok
+    # Nouveau mot de passe
+    assert client.post("/api/auth/reset", json={"token": tok, "password": "newpass12"}).status_code == 200
+    # L'ancien ne marche plus, le nouveau oui
+    assert client.post("/api/auth/login", json={"email": "reset@ex.io", "password": "oldpass12"}).status_code == 401
+    assert client.post("/api/auth/login", json={"email": "reset@ex.io", "password": "newpass12"}).status_code == 200
+    # Jeton déjà consommé → 400
+    assert client.post("/api/auth/reset", json={"token": tok, "password": "again123"}).status_code == 400
+
+
+def test_promo_code_admin_and_application():
+    admin = _admin("promo-admin@ex.io")
+    # Crée un code -20 % sur les recharges
+    r = client.post("/api/admin/promos", json={
+        "code": "noel", "kind": "percent", "value": 20, "scope": "topup", "max_uses": 2,
+    }, headers=admin)
+    assert r.status_code == 200 and r.json()["code"] == "NOEL"
+
+    headers = _register("promo-user@ex.io")
+    aid = client.post("/api/agents", json={"name": "P", "subdomain": "test-promo"},
+                      headers=headers).json()["agent"]["id"]
+    # Recharge 10 € : charge = 11 € (frais 10 %), remise 20 % => 8,80 €
+    data = client.post(f"/api/agents/{aid}/topup",
+                       json={"amount_eur": 10, "promo_code": "NOEL"}, headers=headers).json()
+    assert data["discount_eur"] == 2.2
+    assert data["amount_eur"] == 8.8
+    assert data["credit_eur"] == 10.0  # le crédit reçu ne change pas
+
+    # Code hors périmètre (hosting) refusé
+    assert client.post(f"/api/agents/{aid}/hosting",
+                       json={"plan": "manual", "promo_code": "NOEL"}, headers=headers).status_code == 400
+    # Code inconnu refusé
+    assert client.post(f"/api/agents/{aid}/topup",
+                       json={"amount_eur": 10, "promo_code": "ZZZ"}, headers=headers).status_code == 400
+
+
+def test_promo_usage_limit_and_redemption():
+    admin = _admin("promo-lim@ex.io")
+    client.post("/api/admin/promos", json={
+        "code": "once", "kind": "amount", "value": 5, "scope": "all", "max_uses": 1,
+    }, headers=admin)
+    headers = _register("promo-lim-user@ex.io")
+    aid = client.post("/api/agents", json={"name": "L", "subdomain": "test-lim"},
+                      headers=headers).json()["agent"]["id"]
+    # 1er usage : payé → used_count = 1
+    data = client.post(f"/api/agents/{aid}/topup",
+                       json={"amount_eur": 10, "promo_code": "ONCE"}, headers=headers).json()
+    assert data["discount_eur"] == 5.0
+    cid = data["checkout_url"].split("/pay/")[1]
+    client.post(f"/api/pay/{cid}")
+    # 2e usage : épuisé
+    assert client.post(f"/api/agents/{aid}/topup",
+                       json={"amount_eur": 10, "promo_code": "ONCE"}, headers=headers).status_code == 400
+
+
+def test_admin_fleet_suspend_restore_extend(monkeypatch):
+    from datetime import datetime, timezone
+    from app import api
+    from app.db import SessionFactory
+    from app.models import Tenant
+
+    class FakeClient:
+        def stop_service(self, u): return True
+        def start_service(self, u): return True
+    monkeypatch.setattr(api, "get_client", lambda: FakeClient())
+
+    admin = _admin("fleet-admin@ex.io")
+    aid = _running_agent("fleet-client@ex.io", "test-fleet", hosting_plan="manual")
+
+    # La liste admin inclut l'email du propriétaire
+    agents = client.get("/api/admin/agents", headers=admin).json()["agents"]
+    row = next(a for a in agents if a["id"] == aid)
+    assert row["owner_email"] == "fleet-client@ex.io"
+
+    # Suspendre
+    assert client.post(f"/api/admin/agents/{aid}/suspend", headers=admin).status_code == 200
+    db = SessionFactory(); assert db.get(Tenant, aid).suspended_at is not None; db.close()
+    # Restaurer
+    assert client.post(f"/api/admin/agents/{aid}/restore", headers=admin).status_code == 200
+    db = SessionFactory(); assert db.get(Tenant, aid).suspended_at is None; db.close()
+    # Offrir un mois
+    r = client.post(f"/api/admin/agents/{aid}/extend", json={"months": 1}, headers=admin)
+    assert r.status_code == 200
+
+    # Un non-admin ne peut pas
+    user = _register("fleet-nonadmin@ex.io")
+    assert client.post(f"/api/admin/agents/{aid}/suspend", headers=user).status_code == 403

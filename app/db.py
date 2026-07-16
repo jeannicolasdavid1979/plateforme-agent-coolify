@@ -73,6 +73,12 @@ def init_db():
         "ALTER TABLE tenants ADD COLUMN suspended_at DATETIME",
         "ALTER TABLE tenants ADD COLUMN stripe_subscription_id VARCHAR(64)",
         "ALTER TABLE checkouts ADD COLUMN plan VARCHAR(16)",
+        "ALTER TABLE checkouts ADD COLUMN promo_code VARCHAR(32)",
+        "ALTER TABLE checkouts ADD COLUMN discount_eur FLOAT NOT NULL DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN email_verified BOOLEAN NOT NULL DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN verification_token VARCHAR(64)",
+        "ALTER TABLE users ADD COLUMN reset_token VARCHAR(64)",
+        "ALTER TABLE users ADD COLUMN reset_expires DATETIME",
     ]
     with engine.connect() as conn:
         for stmt in _MIGRATIONS:

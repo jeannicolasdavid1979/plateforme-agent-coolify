@@ -60,6 +60,18 @@ class Settings(BaseSettings):
     # Stripe — les liens de paiement sont saisis dans l'admin (table settings).
     # Le secret de webhook, lui, est un secret d'infra : variable d'environnement.
     stripe_webhook_secret: str = ""
+
+    # ── E-mail (vérification d'adresse & réinitialisation de mot de passe) ──
+    # Si SMTP_HOST est renseigné, les e-mails partent réellement ; sinon, le
+    # lien est JOURNALISÉ (repli de développement) — à configurer avant prod.
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""          # défaut : legal_contact_email si vide
+    smtp_starttls: bool = True
+    # Base publique pour les liens des e-mails (défaut : site_url).
+    public_base_url: str = ""
     # Montants de recharge proposés au client (liste, en euros). Chaque euro
     # rechargé relève d'autant le plafond de la clé OpenRouter dédiée.
     topup_amounts_eur: str = "5,10,20,50,100"

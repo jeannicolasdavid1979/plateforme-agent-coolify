@@ -23,6 +23,14 @@ services:
       # Stripe : secret de signature du webhook (les liens de paiement, eux, se
       # saisissent dans l'admin). Vérifie l'authenticité des événements reçus.
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      # E-mail (vérification d'adresse & réinitialisation de mot de passe). Sans
+      # SMTP_HOST, les liens sont journalisés au lieu d'être envoyés (dev).
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
       # Noms alignés sur app/config.py (env_prefix vide) — sinon l'admin
       # n'est jamais promu et le JWT reste sur sa valeur par défaut.
       JWT_SECRET: ${JWT_SECRET:-change-me}

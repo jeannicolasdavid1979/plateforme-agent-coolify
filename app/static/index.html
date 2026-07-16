@@ -214,6 +214,25 @@
   .topup-row .tr-link { flex:1; }
   .topup-row button { flex:0 0 auto; padding:8px 12px; }
 
+  /* Bandeau de vérification e-mail */
+  .verify-banner { max-width:1120px; margin:0 auto 8px; padding:12px 18px; border-radius:12px;
+                   display:flex; gap:14px; align-items:center; flex-wrap:wrap;
+                   border:1px solid #e0a63a; background:rgba(224,166,58,.08); }
+  .link-muted { color:var(--muted); font-size:13px; text-decoration:underline; }
+
+  /* Tables admin (flotte, codes promo) */
+  .fleet-table { display:flex; flex-direction:column; gap:8px; }
+  .fleet-row { display:flex; gap:12px; align-items:center; flex-wrap:wrap;
+               border:1px solid var(--line); border-radius:12px; padding:12px 14px; background:var(--surface); }
+  .fleet-row .grow { flex:1; min-width:200px; }
+  .fleet-row .who { font-size:12px; color:var(--muted); }
+  .fleet-row .st { font-size:12px; font-weight:600; padding:2px 9px; border-radius:999px; border:1px solid var(--line); }
+  .fleet-row .st.active { color:#4caf7d; border-color:#4caf7d; }
+  .fleet-row .st.suspended, .fleet-row .st.deletable { color:#e0665a; border-color:#e0665a; }
+  .fleet-row .st.grace { color:#e0a63a; border-color:#e0a63a; }
+  .fleet-row button { padding:6px 11px; font-size:12px; }
+  .promo-field input { text-transform:uppercase; }
+
   /* Pied de page légal */
   .site-footer { max-width:1120px; margin:80px auto 0; padding:28px 32px 48px;
                  border-top:1px solid var(--line); display:flex; flex-wrap:wrap;
@@ -281,7 +300,23 @@
       <button class="ghost" onclick="register()">Créer un compte</button>
     </div>
     <p id="msg"></p>
+    <p style="margin-top:4px"><a href="#" onclick="toggleForgot(event)" class="link-muted">Mot de passe oublié ?</a></p>
+    <div id="forgot" class="hidden" style="margin-top:12px;border-top:1px solid var(--line);padding-top:14px">
+      <div class="muted" style="font-size:13px;margin-bottom:8px">Entrez votre e-mail : un lien de réinitialisation vous sera envoyé.</div>
+      <input id="forgot-email" type="email" placeholder="email@exemple.com" autocomplete="email">
+      <div class="row" style="margin-top:8px">
+        <button class="ghost" onclick="forgotPassword()">Envoyer le lien</button>
+        <span id="forgot-msg" class="muted"></span>
+      </div>
+    </div>
   </section>
+
+  <!-- Bandeau : vérification d'e-mail -->
+  <div id="verify-banner" class="verify-banner hidden">
+    <span>✉️ Vérifiez votre adresse e-mail pour sécuriser votre compte.</span>
+    <button class="ghost mini" onclick="resendVerification()">Renvoyer l'e-mail</button>
+    <span id="verify-msg" class="muted" style="font-size:13px"></span>
+  </div>
 
   <!-- Section : Commander -->
   <section id="shop" class="hidden">
@@ -303,6 +338,10 @@
       <summary>Personnaliser — instructions de l'agent (optionnel)</summary>
       <textarea id="tprompt" placeholder="Tu es un assistant IA spécialisé en…"></textarea>
     </details>
+    <div class="promo-field" style="margin-top:12px">
+      <input id="promo" placeholder="Code promo (optionnel)" style="max-width:260px;text-transform:uppercase">
+      <span id="promo-msg" class="muted" style="font-size:13px"></span>
+    </div>
     <div class="row" style="margin-top:16px">
       <button id="create-btn" onclick="createAgent()">Déployer mon agent</button>
       <span id="create-credit" class="muted"></span>
@@ -312,7 +351,38 @@
 
   <!-- Section : Réglages business (admin) -->
   <section id="settings" class="hidden">
-    <div class="eyebrow">Réglages business</div>
+    <!-- Flotte : tous les agents de tous les clients -->
+    <div class="eyebrow">Administration</div>
+    <h2>Flotte — tous les agents</h2>
+    <div class="row" style="margin-top:8px">
+      <button class="ghost" onclick="loadFleet()">Rafraîchir</button>
+      <button class="ghost" onclick="enforceHosting()">Lancer le balayage du cycle de vie</button>
+      <span id="fleet-msg" class="muted"></span>
+    </div>
+    <div id="fleet-table" class="fleet-table" style="margin-top:14px"></div>
+
+    <!-- Codes promo -->
+    <h2 style="margin-top:44px">Codes promo</h2>
+    <p class="muted" style="max-width:680px">Remise en <b>pourcentage</b> ou en <b>montant</b>, sur un périmètre
+      (tout / déploiement / recharge / hébergement). Le client saisit le code avant de payer.</p>
+    <div class="prod-card wide">
+      <div class="inline-fields">
+        <label>Code<input id="pr-code" type="text" placeholder="BIENVENUE" style="text-transform:uppercase"></label>
+        <label>Type<select id="pr-kind"><option value="percent">Pourcentage (%)</option><option value="amount">Montant (€)</option></select></label>
+        <label>Valeur<input id="pr-value" type="number" min="0" step="1"></label>
+        <label>Périmètre<select id="pr-scope"><option value="all">Tout</option><option value="deploy">Déploiement</option><option value="topup">Recharge</option><option value="hosting">Hébergement</option></select></label>
+        <label>Usages max (vide = illimité)<input id="pr-max" type="number" min="1" step="1"></label>
+        <label>Expire le (optionnel)<input id="pr-exp" type="date"></label>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button class="ghost" onclick="savePromo()">Créer / mettre à jour le code</button>
+        <span id="promo-admin-msg" class="muted"></span>
+      </div>
+    </div>
+    <div id="promo-list" class="fleet-table" style="margin-top:14px"></div>
+
+    <!-- Prix & liens Stripe -->
+    <div class="eyebrow" style="margin-top:44px">Réglages business</div>
     <h2>Vos offres, vos prix, vos liens</h2>
     <p class="muted" style="max-width:680px">Chaque offre réunit son <b>montant</b> et son
       <b>lien de paiement Stripe</b>. Sans lien, la page de paiement simulée reste utilisée —
@@ -617,11 +687,18 @@ async function createAgent() {
       name, subdomain,
       model: $('tmodel').value,
       system_prompt: $('tprompt').value.trim(),
+      promo_code: promoValue(),
     })});
     // Même parcours que Stripe Checkout : page de paiement hébergée, puis
     // retour au dashboard où le déploiement se suit en direct.
     location.href = data.checkout_url;
   } catch (e) { msg.textContent = e.message; btn.disabled = false; }
+}
+
+// Code promo partagé : saisi une fois dans le shop, appliqué à tout paiement.
+function promoValue() {
+  const el = $('promo');
+  return el && el.value.trim() ? el.value.trim().toUpperCase() : undefined;
 }
 
 function stepsHtml(job, animate = true) {
@@ -747,7 +824,7 @@ setInterval(() => {
 
 async function subscribe(id, plan) {
   try {
-    const data = await api(`/api/agents/${id}/hosting`, {method: 'POST', body: JSON.stringify({plan})});
+    const data = await api(`/api/agents/${id}/hosting`, {method: 'POST', body: JSON.stringify({plan, promo_code: promoValue()})});
     location.href = data.checkout_url;
   } catch (e) { alert(e.message); }
 }
@@ -876,7 +953,7 @@ async function payNow(id) {
 
 async function topup(id, amount) {
   try {
-    const body = amount != null ? JSON.stringify({amount_eur: amount}) : undefined;
+    const body = JSON.stringify({amount_eur: amount, promo_code: promoValue()});
     const data = await api(`/api/agents/${id}/topup`, {method:'POST', body});
     location.href = data.checkout_url;
   } catch (e) { alert(e.message); }
@@ -893,6 +970,118 @@ async function destroy(id, name) {
     await api(`/api/agents/${id}`, {method:'DELETE'});
     loadTenants();
   } catch (e) { alert(e.message); }
+}
+
+// ── Mot de passe oublié & vérification e-mail ───────────────────────
+function toggleForgot(e) { e.preventDefault(); $('forgot').classList.toggle('hidden'); }
+
+async function forgotPassword() {
+  const em = $('forgot-email').value.trim() || $('email').value.trim();
+  const msg = $('forgot-msg');
+  if (!em) { msg.textContent = 'Entrez votre e-mail.'; return; }
+  try {
+    await api('/api/auth/forgot', {method:'POST', body: JSON.stringify({email: em})});
+    msg.textContent = 'Si ce compte existe, un e-mail vient de partir.';
+  } catch (e) { msg.textContent = e.message; }
+}
+
+async function resendVerification() {
+  const msg = $('verify-msg');
+  try {
+    const r = await api('/api/auth/resend-verification', {method:'POST'});
+    msg.textContent = r.status === 'already_verified' ? 'Déjà vérifié.' : '✔ E-mail renvoyé.';
+  } catch (e) { msg.textContent = e.message; }
+}
+
+// ── Admin : flotte de tous les agents ───────────────────────────────
+async function loadFleet() {
+  if (!isAdmin || !$('fleet-table')) return;
+  try {
+    const d = await api('/api/admin/agents');
+    const box = $('fleet-table');
+    if (!d.agents.length) { box.innerHTML = '<div class="muted">Aucun agent.</div>'; return; }
+    box.innerHTML = d.agents.map(fleetRowHtml).join('');
+  } catch (e) { $('fleet-msg').textContent = e.message; }
+}
+
+function fleetRowHtml(a) {
+  const h = a.hosting || {};
+  const until = h.suspended ? (h.delete_at ? Date.parse(h.delete_at) : 0)
+                            : (h.paid_until ? Date.parse(h.paid_until) : 0);
+  const cd = until ? `<span class="fomo-countdown" data-until="${until}">…</span>` : '—';
+  const esc = (a.name || '').replace(/'/g, "\\'");
+  return `<div class="fleet-row">
+    <div class="grow">
+      <strong>${a.name}</strong> <span class="st ${h.state}">${h.state}</span>
+      <div class="who">${a.owner_email} · ${a.subdomain} · crédit ${eur(a.balance_eur)} € · ${h.plan}</div>
+      <div class="who">${h.suspended ? 'suppression dans ' : 'échéance dans '} ${cd}</div>
+    </div>
+    ${h.suspended
+      ? `<button class="ghost" onclick="fleetRestore('${a.id}')">Restaurer</button>`
+      : `<button class="ghost" onclick="fleetSuspend('${a.id}')">Suspendre</button>`}
+    <button class="ghost" onclick="fleetExtend('${a.id}')">+1 mois offert</button>
+    <button class="danger" onclick="fleetDelete('${a.id}','${esc}')">Supprimer</button>
+  </div>`;
+}
+
+async function fleetAction(url, method='POST', body) {
+  try { await api(url, {method, body}); loadFleet(); }
+  catch (e) { alert(e.message); }
+}
+const fleetSuspend = (id) => fleetAction(`/api/admin/agents/${id}/suspend`);
+const fleetRestore = (id) => fleetAction(`/api/admin/agents/${id}/restore`);
+const fleetExtend  = (id) => fleetAction(`/api/admin/agents/${id}/extend`, 'POST', JSON.stringify({months:1}));
+function fleetDelete(id, name) {
+  if (!confirm(`ADMIN — Supprimer définitivement l'agent « ${name} » (conteneurs + clé + données) ?`)) return;
+  fleetAction(`/api/admin/agents/${id}`, 'DELETE');
+}
+async function enforceHosting() {
+  try { const r = await api('/api/admin/enforce-hosting', {method:'POST'});
+    $('fleet-msg').textContent = `Balayage : ${r.changed} agent(s) mis à jour.`; loadFleet(); }
+  catch (e) { $('fleet-msg').textContent = e.message; }
+}
+
+// ── Admin : codes promo ─────────────────────────────────────────────
+async function loadPromos() {
+  if (!isAdmin || !$('promo-list')) return;
+  try {
+    const d = await api('/api/admin/promos');
+    const box = $('promo-list');
+    box.innerHTML = d.promos.length ? d.promos.map(promoRowHtml).join('')
+                                    : '<div class="muted">Aucun code promo.</div>';
+  } catch (e) { /* ignore */ }
+}
+function promoRowHtml(p) {
+  const val = p.kind === 'percent' ? `−${p.value} %` : `−${eur(p.value)} €`;
+  const uses = p.max_uses != null ? `${p.used_count}/${p.max_uses}` : `${p.used_count}/∞`;
+  const exp = p.expires_at ? ' · exp. ' + p.expires_at.slice(0, 10) : '';
+  return `<div class="fleet-row">
+    <div class="grow"><strong>${p.code}</strong> <span class="st ${p.active ? 'active' : ''}">${val}</span>
+      <div class="who">périmètre : ${p.scope} · usages ${uses}${exp}${p.active ? '' : ' · inactif'}</div></div>
+    <button class="danger" onclick="deletePromo('${p.code}')">Supprimer</button>
+  </div>`;
+}
+async function savePromo() {
+  const msg = $('promo-admin-msg');
+  const body = {
+    code: $('pr-code').value.trim().toUpperCase(),
+    kind: $('pr-kind').value,
+    value: parseFloat($('pr-value').value) || 0,
+    scope: $('pr-scope').value,
+    active: true,
+    max_uses: $('pr-max').value ? parseInt($('pr-max').value) : null,
+    expires_at: $('pr-exp').value || null,
+  };
+  try {
+    await api('/api/admin/promos', {method:'POST', body: JSON.stringify(body)});
+    msg.textContent = '✔ Code enregistré'; $('pr-code').value = ''; $('pr-value').value = '';
+    loadPromos();
+  } catch (e) { msg.textContent = e.message; }
+}
+async function deletePromo(code) {
+  if (!confirm(`Supprimer le code ${code} ?`)) return;
+  try { await api(`/api/admin/promos/${encodeURIComponent(code)}`, {method:'DELETE'}); loadPromos(); }
+  catch (e) { alert(e.message); }
 }
 
 async function openChat(id) {
@@ -984,6 +1173,7 @@ function refresh() {
   $('fleet').classList.toggle('hidden', !logged);
   $('account').classList.toggle('hidden', !logged);
   $('settings').classList.add('hidden');
+  $('verify-banner').classList.add('hidden');
   $('logout').classList.toggle('hidden', !logged);
   $('who').textContent = email;
   if (logged) {
@@ -991,7 +1181,8 @@ function refresh() {
       isAdmin = me.is_admin;
       $('who').textContent = email + (isAdmin ? ' · admin' : '');
       $('settings').classList.toggle('hidden', !isAdmin);
-      if (isAdmin) { renderCachedTenants(); loadStripe(); }
+      $('verify-banner').classList.toggle('hidden', !!me.email_verified);
+      if (isAdmin) { renderCachedTenants(); loadStripe(); loadFleet(); loadPromos(); }
     }).catch(() => {});
     loadPricing().then(loadTenants);
   }

@@ -19,6 +19,12 @@ from .models import User
 _SCRYPT = {"n": 2**14, "r": 8, "p": 1}
 
 
+def new_token(nbytes: int = 24) -> str:
+    """Jeton opaque URL-safe (vérification d'e-mail, réinitialisation)."""
+    import secrets
+    return secrets.token_urlsafe(nbytes)
+
+
 def hash_password(password: str) -> str:
     salt = os.urandom(16)
     digest = hashlib.scrypt(password.encode(), salt=salt, **_SCRYPT)
