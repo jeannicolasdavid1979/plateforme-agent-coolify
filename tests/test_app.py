@@ -1160,3 +1160,87 @@ def test_admin_fleet_suspend_restore_extend(monkeypatch):
     # Un non-admin ne peut pas
     user = _register("fleet-nonadmin@ex.io")
     assert client.post(f"/api/admin/agents/{aid}/suspend", headers=user).status_code == 403
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  Mode API Stripe : sessions générées automatiquement depuis les prix admin
+# ══════════════════════════════════════════════════════════════════════
+
+class _FakeStripeResp:
+    def __init__(self, url="https://checkout.stripe.com/c/pay/cs_test_x"):
+        self._url = url
+    def raise_for_status(self): pass
+    def json(self): return {"url": self._url}
+
+
+def _capture_stripe(monkeypatch, calls):
+    """Intercepte les POST vers l'API Stripe et capture les paramètres."""
+    from app import stripe_pay
+
+    def fake_post(url, data=None, auth=None, timeout=None):
+        calls.append({"url": url, "data": dict(data), "auth": auth})
+        return _FakeStripeResp()
+    monkeypatch.setattr(stripe_pay.httpx, "post", fake_post)
+
+
+def test_stripe_api_session_from_admin_amounts(monkeypatch):
+    """Avec STRIPE_SECRET_KEY, le paiement est une session API dont le montant
+    vient des réglages admin (frais inclus) — zéro configuration côté Stripe."""
+    from app.config import get_settings
+
+    calls = []
+    _capture_stripe(monkeypatch, calls)
+    get_settings().stripe_secret_key = "sk_test_abc"
+    try:
+        headers = _register("api-stripe@ex.io")
+        aid = client.post("/api/agents", json={"name": "S", "subdomain": "test-api-stripe"},
+                          headers=headers).json()["agent"]["id"]
+        data = client.post(f"/api/agents/{aid}/topup", json={"amount_eur": 10}, headers=headers).json()
+        # Redirection vers la session Stripe créée à la volée
+        assert data["checkout_url"].startswith("https://checkout.stripe.com/")
+        sent = calls[-1]["data"]
+        assert calls[-1]["auth"] == ("sk_test_abc", "")
+        assert sent["mode"] == "payment"
+        assert sent["line_items[0][price_data][currency]"] == "eur"
+        # 10 € de crédit + 10 % de frais = 11,00 € → 1100 cents
+        assert sent["line_items[0][price_data][unit_amount]"] == "1100"
+        assert sent["client_reference_id"] == data["checkout_url"] or sent["client_reference_id"]
+        assert sent["customer_email"] == "api-stripe@ex.io"
+
+        # L'admin change le prix de l'abonnement → la session suit AUTOMATIQUEMENT
+        admin = _admin("api-stripe-admin@ex.io")
+        client.put("/api/admin/pricing", json={"hosting_sub_monthly_eur": 25}, headers=admin)
+        client.post(f"/api/agents/{aid}/hosting", json={"plan": "sub_monthly"}, headers=headers)
+        sent = calls[-1]["data"]
+        assert sent["mode"] == "subscription"
+        assert sent["line_items[0][price_data][recurring][interval]"] == "month"
+        assert sent["line_items[0][price_data][unit_amount]"] == "2500"
+
+        # Le code promo est déduit du montant envoyé à Stripe
+        client.post("/api/admin/promos", json={"code": "API10", "kind": "amount",
+                                               "value": 1, "scope": "topup"}, headers=admin)
+        client.post(f"/api/agents/{aid}/topup",
+                    json={"amount_eur": 10, "promo_code": "API10"}, headers=headers)
+        sent = calls[-1]["data"]
+        assert sent["line_items[0][price_data][unit_amount]"] == "1000"  # 11 − 1 €
+    finally:
+        get_settings().stripe_secret_key = ""
+
+
+def test_stripe_api_failure_falls_back_to_simulated(monkeypatch):
+    """Si l'API Stripe échoue, le paiement retombe sur la page simulée."""
+    from app import stripe_pay
+    from app.config import get_settings
+
+    def boom(url, data=None, auth=None, timeout=None):
+        raise RuntimeError("stripe down")
+    monkeypatch.setattr(stripe_pay.httpx, "post", boom)
+    get_settings().stripe_secret_key = "sk_test_abc"
+    try:
+        headers = _register("api-fallback@ex.io")
+        aid = client.post("/api/agents", json={"name": "F", "subdomain": "test-api-fb"},
+                          headers=headers).json()["agent"]["id"]
+        data = client.post(f"/api/agents/{aid}/topup", json={"amount_eur": 10}, headers=headers).json()
+        assert data["checkout_url"].startswith("/pay/")
+    finally:
+        get_settings().stripe_secret_key = ""

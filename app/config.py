@@ -57,8 +57,13 @@ class Settings(BaseSettings):
     hosting_grace_days: int = 0             # jours de tolérance après l'échéance avant suspension
     hosting_retention_days: int = 30        # jours de rétention (restaurable) avant suppression définitive
 
-    # Stripe — les liens de paiement sont saisis dans l'admin (table settings).
-    # Le secret de webhook, lui, est un secret d'infra : variable d'environnement.
+    # Stripe — deux niveaux d'intégration :
+    #  • STRIPE_SECRET_KEY (sk_live_…) : mode API COMPLET. Les sessions de
+    #    paiement sont générées automatiquement avec les montants de l'admin
+    #    (price_data inline) — rien à synchroniser côté Stripe.
+    #  • Sans clé : repli sur les Payment Links saisis dans l'admin, puis sur
+    #    la page de paiement simulée. Secrets d'infra : variables d'env UNIQUEMENT.
+    stripe_secret_key: str = ""
     stripe_webhook_secret: str = ""
 
     # ── E-mail (vérification d'adresse & réinitialisation de mot de passe) ──

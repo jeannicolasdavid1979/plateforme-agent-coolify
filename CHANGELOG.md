@@ -3,6 +3,21 @@
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/).
 Les dates suivent l'ordre de développement.
 
+## [Non publié] — Stripe en mode API automatique
+
+### Ajouté
+- **Intégration API Stripe complète** (`STRIPE_SECRET_KEY`) : les paiements sont
+  des **Checkout Sessions créées à la volée** avec `price_data` inline — le
+  montant envoyé à Stripe est exactement celui calculé par la plateforme (prix
+  admin + frais de service − code promo). **Tout changement dans « Réglages
+  business » s'applique immédiatement**, sans produit/prix/lien à maintenir
+  côté Stripe. L'abonnement mensuel devient un **abonnement récurrent Stripe**
+  (`mode=subscription`), renouvelé par `invoice.paid`.
+- Chaîne de replis : API → Payment Links de l'admin → page de paiement simulée
+  (montants < 0,50 € — minimum Stripe — servis par la page simulée).
+- Admin : pastille d'état « API Stripe active / mode liens » ; `GET
+  /api/admin/stripe` expose `api_enabled`.
+
 ## [Non publié] — Flotte admin, codes promo, e-mails (vérif. & reset)
 
 ### Ajouté

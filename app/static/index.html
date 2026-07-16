@@ -384,10 +384,11 @@
     <!-- Prix & liens Stripe -->
     <div class="eyebrow" style="margin-top:44px">Réglages business</div>
     <h2>Vos offres, vos prix, vos liens</h2>
-    <p class="muted" style="max-width:680px">Chaque offre réunit son <b>montant</b> et son
-      <b>lien de paiement Stripe</b>. Sans lien, la page de paiement simulée reste utilisée —
-      pratique pour tester avant de brancher Stripe. Webhook :
-      <code>/api/stripe/webhook</code>. <span id="wh-state" class="pill"></span></p>
+    <p class="muted" style="max-width:680px">Avec la clé API (<code>STRIPE_SECRET_KEY</code>),
+      les paiements Stripe sont <b>générés automatiquement depuis vos montants ci-dessous</b>
+      (frais et codes promo compris) — les liens ne servent alors que de repli. Sans clé ni lien,
+      la page de paiement simulée reste utilisée. Webhook : <code>/api/stripe/webhook</code>.
+      <span id="stripe-mode" class="pill"></span> <span id="wh-state" class="pill"></span></p>
 
     <div class="prod-grid">
       <!-- Déploiement -->
@@ -629,6 +630,9 @@ async function loadStripe() {
     $('s-host-sub').value = stripeLinks.hosting_sub || '';
     $('s-host-annual').value = stripeLinks.hosting_annual || '';
     renderTopupRows();  // réaffiche les lignes avec leurs liens
+    if ($('stripe-mode')) $('stripe-mode').textContent = d.api_enabled
+      ? '✔ API Stripe active — tout est automatique'
+      : 'Mode liens/simulation (STRIPE_SECRET_KEY absente)';
     $('wh-state').textContent = d.webhook_configured
       ? '✔ Webhook signé' : '⚠ Webhook non signé (STRIPE_WEBHOOK_SECRET absent)';
   } catch (e) { /* non-admin ou indisponible */ }

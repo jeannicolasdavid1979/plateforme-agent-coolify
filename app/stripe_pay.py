@@ -1,25 +1,96 @@
-"""Intégration Stripe par **Payment Links** (approche sans SDK).
+"""Intégration Stripe (sans SDK) — trois niveaux, du plus automatique au repli :
 
-L'admin colle des liens de paiement Stripe dans les réglages. Au moment de
-payer, on redirige le client vers le lien en y attachant ``client_reference_id``
-(= l'id du Checkout local) : Stripe le renvoie tel quel dans l'événement
-``checkout.session.completed``, ce qui permet de créditer automatiquement le bon
-paiement via le webhook, sans rapprochement manuel.
+1. **API Checkout Sessions** (`STRIPE_SECRET_KEY` configurée) : la session de
+   paiement est créée à la volée avec le montant EXACT calculé par la
+   plateforme (prix admin, frais de service, code promo déduit) via
+   ``price_data`` inline. Rien à créer ni synchroniser côté Stripe : tout
+   changement dans l'admin s'applique immédiatement. Les abonnements mensuels
+   utilisent ``mode=subscription`` (prélèvement récurrent automatique).
+2. **Payment Links** collés dans l'admin (sans clé secrète) : redirection vers
+   le lien avec ``client_reference_id``.
+3. **Page de paiement simulée** : sans clé ni lien — pour tester.
 
-Aucune clé secrète Stripe n'est requise pour rediriger ; seule la vérification
-de signature du webhook utilise le *signing secret* (`STRIPE_WEBHOOK_SECRET`).
+Dans les trois cas, ``client_reference_id`` = l'id du Checkout local ; Stripe le
+renvoie dans ``checkout.session.completed`` et le webhook crédite le bon compte.
+La vérification de signature du webhook utilise `STRIPE_WEBHOOK_SECRET`.
 """
 from __future__ import annotations
 
 import hashlib
 import hmac
 import json
+import logging
 import time
 from urllib.parse import quote
 
+import httpx
 from sqlalchemy.orm import Session
 
+from .config import get_settings
 from .models import Setting
+
+_log = logging.getLogger("stripe")
+
+_API_SESSIONS = "https://api.stripe.com/v1/checkout/sessions"
+# Montant minimum accepté par Stripe (~0,50 € en EUR) : en-dessous, on retombe
+# sur la page simulée plutôt que d'essuyer un refus d'API.
+_MIN_CENTS = 50
+
+
+def api_enabled() -> bool:
+    return bool(get_settings().stripe_secret_key)
+
+
+def create_checkout_session(
+    *,
+    checkout_id: str,
+    product_name: str,
+    amount_eur: float,
+    email: str | None = None,
+    recurring_monthly: bool = False,
+) -> str | None:
+    """Crée une Checkout Session Stripe avec le montant fourni (price_data
+    inline) et retourne son ``url``. ``None`` si l'API n'est pas configurée,
+    si le montant est sous le minimum Stripe, ou en cas d'erreur (l'appelant
+    retombe alors sur les Payment Links puis la page simulée)."""
+    s = get_settings()
+    if not s.stripe_secret_key:
+        return None
+    cents = int(round(amount_eur * 100))
+    if cents < _MIN_CENTS:
+        return None
+    base = _public_base()
+    data = {
+        "mode": "subscription" if recurring_monthly else "payment",
+        "line_items[0][price_data][currency]": "eur",
+        "line_items[0][price_data][unit_amount]": str(cents),
+        "line_items[0][price_data][product_data][name]": product_name,
+        "line_items[0][quantity]": "1",
+        "client_reference_id": checkout_id,
+        "success_url": f"{base}/?paiement=ok",
+        "cancel_url": f"{base}/?paiement=annule",
+    }
+    if recurring_monthly:
+        data["line_items[0][price_data][recurring][interval]"] = "month"
+    if email:
+        data["customer_email"] = email
+    try:
+        resp = httpx.post(
+            _API_SESSIONS, data=data, auth=(s.stripe_secret_key, ""), timeout=20
+        )
+        resp.raise_for_status()
+        url = resp.json().get("url")
+        if url:
+            return url
+        _log.error("Session Stripe créée mais sans URL — repli sur les liens")
+    except Exception as exc:  # noqa: BLE001 — tout échec bascule sur le repli
+        _log.error("Création de session Stripe échouée : %s — repli sur les liens", exc)
+    return None
+
+
+def _public_base() -> str:
+    s = get_settings()
+    return (s.public_base_url or s.site_url or "").rstrip("/")
 
 # Clés de réglages (table settings) pour les liens Stripe.
 LINK_KEYS = {

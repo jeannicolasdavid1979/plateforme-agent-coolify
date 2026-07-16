@@ -608,9 +608,39 @@ def create_hosting_checkout(
     }
 
 
+def _stripe_product_name(checkout: Checkout, tenant: Tenant | None) -> str:
+    """Libellé affiché sur la page de paiement Stripe (sans détail d'infra)."""
+    who = f" — {tenant.name}" if tenant else ""
+    if checkout.kind == "deploy":
+        return f"Création de votre agent IA{who}"
+    if checkout.kind == "hosting":
+        return {
+            "manual": f"Hébergement 1 mois, sans engagement{who}",
+            "sub_monthly": f"Abonnement hébergement mensuel{who}",
+            "sub_annual": f"Hébergement 12 mois (1 mois offert){who}",
+        }.get(checkout.plan or "manual", f"Hébergement{who}")
+    credit = f"{checkout.credit_eur:.0f}" if checkout.credit_eur else "?"
+    return f"Recharge de crédit IA {credit} €{who}"
+
+
 def _checkout_url(db: Session, checkout: Checkout, *, email: str | None,
                   amount_eur: float | None = None, plan: str | None = None) -> str:
-    """Lien Stripe configuré pour ce paiement, sinon page de paiement simulée."""
+    """URL de paiement pour ce checkout, par ordre de préférence :
+    1. session Checkout créée par l'API Stripe avec le montant EXACT (prix
+       admin + frais − remise) — tout est automatique, rien à configurer
+       côté Stripe ; abonnement récurrent pour le plan mensuel ;
+    2. Payment Link collé dans l'admin ;
+    3. page de paiement simulée."""
+    tenant = db.get(Tenant, checkout.tenant_id)
+    url = stripe_pay.create_checkout_session(
+        checkout_id=checkout.id,
+        product_name=_stripe_product_name(checkout, tenant),
+        amount_eur=checkout.amount_eur,
+        email=email,
+        recurring_monthly=(checkout.kind == "hosting" and checkout.plan == "sub_monthly"),
+    )
+    if url:
+        return url
     url = stripe_pay.checkout_redirect_url(
         db, checkout_id=checkout.id, kind=checkout.kind,
         amount_eur=amount_eur, plan=plan, email=email,
@@ -1151,9 +1181,10 @@ def delete_promo(code: str, admin: User = Depends(require_admin), db: Session = 
 
 @router.get("/api/admin/stripe")
 def get_stripe_links(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
-    """Liens de paiement Stripe configurés + état du secret de webhook."""
+    """Liens de paiement Stripe configurés + état de l'intégration (API/webhook)."""
     return {
         "links": stripe_pay.get_links(db),
+        "api_enabled": stripe_pay.api_enabled(),
         "webhook_configured": bool(get_settings().stripe_webhook_secret),
         "webhook_url": "/api/stripe/webhook",
     }

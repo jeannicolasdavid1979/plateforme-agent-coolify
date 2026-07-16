@@ -154,6 +154,7 @@ Configurées dans Coolify → Application → Environment :
 | `OPENROUTER_PROVISIONING_KEY` | Clé maître de provisioning (crée les clés par agent) | `sk-or-v1-...` |
 | `EUR_USD_RATE` | Conversion crédit € → plafond $ OpenRouter | `1.0` |
 | `SERVICE_FEE_RATE` | Frais de service sur les recharges (`0.10` = +10 %) | `0.10` |
+| `STRIPE_SECRET_KEY` | Clé secrète Stripe — active le mode API automatique | `sk_live_...` |
 | `STRIPE_WEBHOOK_SECRET` | Secret de signature du webhook Stripe (vérifie les événements) | `whsec_...` |
 | `SMTP_HOST`·`SMTP_PORT`·`SMTP_USER`·`SMTP_PASSWORD`·`SMTP_FROM` | Envoi des e-mails (vérification, reset). Sans `SMTP_HOST` : liens journalisés | `smtp.example.com` |
 | `PUBLIC_BASE_URL` | Base des liens dans les e-mails (défaut : `site_url`) | `https://plateformehermes.kechlab.com` |
@@ -219,21 +220,34 @@ Le balayage tourne **automatiquement chaque heure** (tâche de fond) ; l'admin
 peut aussi le déclencher via `POST /api/admin/enforce-hosting`. Tout est
 **explicité dans les CGV** (`/legal/cgv`), avec les montants et délais réels.
 
-### Paiements Stripe (Payment Links + webhook)
+### Paiements Stripe — mode API automatique (recommandé)
 
-L'admin colle ses **Stripe Payment Links** dans *Réglages business → Liens de
-paiement Stripe* (déploiement, hébergement mensuel/annuel, et un lien par
-montant de recharge). Au paiement, le client est redirigé vers le lien Stripe
-avec un `client_reference_id` (l'id du paiement local) ; Stripe le renvoie dans
-l'événement **`checkout.session.completed`** reçu sur `POST /api/stripe/webhook`,
-ce qui **crédite automatiquement** le bon compte — sans rapprochement manuel.
-Les abonnements auto-débités sont prolongés via `invoice.paid`.
+Avec **`STRIPE_SECRET_KEY`** (variable d'environnement, clé `sk_live_…`), la
+plateforme crée les paiements **directement par l'API Stripe** (Checkout
+Sessions, `price_data` inline) : le montant envoyé à Stripe est **exactement**
+celui calculé par la plateforme — prix admin + frais de service − code promo.
+**Tout changement dans « Réglages business » s'applique immédiatement**, sans
+rien créer ni synchroniser côté Stripe (ni produit, ni prix, ni lien).
 
-- Configurez le webhook dans Stripe vers `https://VOTRE-DOMAINE/api/stripe/webhook`
-  et renseignez `STRIPE_WEBHOOK_SECRET` pour **vérifier la signature** des
-  événements (fortement recommandé en production).
-- **Sans lien configuré**, la plateforme retombe sur la **page de paiement
-  simulée** — tout reste fonctionnel pour tester avant de brancher Stripe.
+- Déploiement, recharges, hébergement sans engagement et annuel → paiement
+  unique (`mode=payment`).
+- Abonnement mensuel → **abonnement récurrent Stripe** (`mode=subscription`,
+  prélèvement automatique chaque mois) ; les renouvellements arrivent par
+  l'événement `invoice.paid`.
+- Chaque session porte `client_reference_id` (l'id du paiement local) :
+  l'événement **`checkout.session.completed`** reçu sur
+  `POST /api/stripe/webhook` **crédite automatiquement** le bon compte.
+
+Configuration (2 valeurs dans Coolify) :
+1. `STRIPE_SECRET_KEY` = clé secrète (dashboard Stripe → Developers → API keys).
+   ⚠️ Jamais dans le code ni dans l'admin — variable d'environnement uniquement.
+2. `STRIPE_WEBHOOK_SECRET` = signing secret du webhook pointé vers
+   `https://VOTRE-DOMAINE/api/stripe/webhook` (événements :
+   `checkout.session.completed`, `invoice.paid`).
+
+**Replis automatiques** : sans clé API, les **Payment Links** collés dans
+l'admin sont utilisés ; sans lien non plus, la **page de paiement simulée**
+prend le relais — la plateforme reste testable de bout en bout.
 
 ### Flotte admin, codes promo, e-mails
 

@@ -20,8 +20,11 @@ services:
       # Frais de service sur les recharges (0.10 = +10 %). Modifiable ensuite
       # depuis l'interface admin (Réglages business).
       SERVICE_FEE_RATE: ${SERVICE_FEE_RATE:-0.10}
-      # Stripe : secret de signature du webhook (les liens de paiement, eux, se
-      # saisissent dans l'admin). Vérifie l'authenticité des événements reçus.
+      # Stripe : avec STRIPE_SECRET_KEY (sk_live_…), les paiements sont générés
+      # automatiquement par l'API avec les montants de l'admin (mode API complet).
+      # Sans elle : repli sur les Payment Links de l'admin, puis page simulée.
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      # Secret de signature du webhook — vérifie l'authenticité des événements.
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
       # E-mail (vérification d'adresse & réinitialisation de mot de passe). Sans
       # SMTP_HOST, les liens sont journalisés au lieu d'être envoyés (dev).
