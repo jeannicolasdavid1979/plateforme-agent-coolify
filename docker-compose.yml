@@ -9,10 +9,17 @@ services:
       COOLIFY_ENVIRONMENT: ${COOLIFY_ENVIRONMENT:-production}
       COOLIFY_SERVER_UUID: ${COOLIFY_SERVER_UUID:-mggo8cg8kokwcgk48sw0o4c4}
       COOLIFY_DESTINATION_UUID: ${COOLIFY_DESTINATION_UUID:-xl2ufkvx4pjnjpj8hgsoq9wd}
+      # Persistance : chemin ABSOLU dans le volume nommé (voir plus bas). Un
+      # chemin relatif dépendrait du répertoire courant ; l'absolu garantit
+      # que la base vit dans /app/data monté sur orchestrator-data.
+      DATABASE_URL: ${DATABASE_URL:-sqlite:////app/data/orchestrator.db}
       # LLM — clé partagée (repli) + clé maître de provisioning (clés par agent)
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
       OPENROUTER_PROVISIONING_KEY: ${OPENROUTER_PROVISIONING_KEY:-}
       EUR_USD_RATE: ${EUR_USD_RATE:-1.0}
+      # Frais de service sur les recharges (0.10 = +10 %). Modifiable ensuite
+      # depuis l'interface admin (Réglages business).
+      SERVICE_FEE_RATE: ${SERVICE_FEE_RATE:-0.10}
       # Noms alignés sur app/config.py (env_prefix vide) — sinon l'admin
       # n'est jamais promu et le JWT reste sur sa valeur par défaut.
       JWT_SECRET: ${JWT_SECRET:-change-me}
@@ -29,6 +36,14 @@ services:
     volumes:
       - orchestrator-data:/app/data
       - /var/run/docker.sock:/var/run/docker.sock
+    # Health check : Coolify/Traefik n'envoient le trafic qu'une fois l'app
+    # prête. /health répond 200 dès qu'uvicorn est levé.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     expose:
       - "8000"
     networks:

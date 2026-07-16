@@ -168,10 +168,13 @@
   .topup .muted { display:block; margin-bottom:8px; }
   .topup-amounts { display:flex; flex-wrap:wrap; gap:8px; }
   button.chip { padding:7px 14px; font-size:13px; font-weight:600;
+                display:inline-flex; flex-direction:column; align-items:center; gap:2px;
                 background:var(--surface); color:var(--text);
-                border:1px solid var(--line); border-radius:999px; }
+                border:1px solid var(--line); border-radius:14px; line-height:1.25; }
   button.chip:hover { border-color:var(--accent); color:var(--accent);
                       box-shadow:0 6px 18px rgba(0,0,0,.3); }
+  button.chip .chip-total { font-size:11px; font-weight:500; color:var(--muted); }
+  button.chip:hover .chip-total { color:var(--accent); }
 
   /* Pied de page légal */
   .site-footer { max-width:1120px; margin:80px auto 0; padding:28px 32px 48px;
@@ -287,6 +290,11 @@
         <input id="p-credit" type="number" min="0" step="0.5">
       </div>
       <div class="card">
+        <div class="muted">Frais de service sur les recharges (%)</div>
+        <input id="p-fee" type="number" min="0" max="100" step="1">
+        <div class="muted" style="margin-top:6px;font-size:12px">Ajouté au montant payé par le client ; le crédit IA reçu reste le montant choisi.</div>
+      </div>
+      <div class="card">
         <div class="muted">Montants de recharge proposés (séparés par des virgules)</div>
         <input id="p-amounts" type="text" placeholder="5,10,20,50,100">
       </div>
@@ -361,7 +369,7 @@ const STEP_LABELS = {
   done: 'Agent en ligne',
 };
 const STATUS_LABELS = { awaiting_payment: 'à payer', pending: 'en attente', deploying: 'déploiement', running: 'en ligne', failed: 'échec' };
-let pricing = { deploy_price_eur: 0, topup_amount_eur: 0, initial_credit_eur: 0, topup_amounts_eur: [] };
+let pricing = { deploy_price_eur: 0, topup_amount_eur: 0, initial_credit_eur: 0, service_fee_rate: 0, topup_amounts_eur: [] };
 const eur = (n) => Number(n || 0).toFixed(2).replace('.', ',');
 
 function errorMessage(detail, fallback) {
@@ -429,6 +437,8 @@ async function loadPricing() {
     $('p-deploy').value = pricing.deploy_price_eur;
     $('p-topup').value = pricing.topup_amount_eur;
     $('p-credit').value = pricing.initial_credit_eur;
+    // Taux stocké en fraction (0.10) côté serveur, saisi en % côté admin
+    if ($('p-fee')) $('p-fee').value = Math.round((pricing.service_fee_rate || 0) * 100);
     // Nombres bruts (point décimal) : les virgules servent de séparateurs
     if ($('p-amounts')) $('p-amounts').value = (pricing.topup_amounts_eur || []).join(', ');
   } catch (e) { /* valeurs par défaut serveur */ }
@@ -441,6 +451,7 @@ async function savePricing() {
       deploy_price_eur: parseFloat($('p-deploy').value),
       topup_amount_eur: parseFloat($('p-topup').value),
       initial_credit_eur: parseFloat($('p-credit').value),
+      service_fee_rate: (parseFloat($('p-fee').value) || 0) / 100,
       topup_amounts_eur: $('p-amounts').value.replace(/\s|€/g, ''),
     })});
     $('pricing-msg').textContent = '✔ Réglages enregistrés';
@@ -548,10 +559,17 @@ function renderTenantCard(a, job, fz) {
         ${del}
       </div>
       <div class="topup fade-up">
-        <span class="muted">Recharger le crédit IA</span>
+        <span class="muted">Recharger le crédit IA${(pricing.service_fee_rate > 0)
+          ? ` — frais de service +${Math.round(pricing.service_fee_rate * 100)} % (finance l'exploitation de la plateforme)`
+          : ''}</span>
         <div class="topup-amounts">
-          ${(pricing.topup_amounts_eur || []).map(m =>
-            `<button class="chip" onclick="topup('${a.id}', ${m})">${eur(m)} €</button>`).join('')}
+          ${(pricing.topup_amounts_eur || []).map(m => {
+            const total = Math.round(m * (1 + (pricing.service_fee_rate || 0)) * 100) / 100;
+            const label = total > m
+              ? `${eur(m)} € de crédit<span class="chip-total">${eur(total)} € à payer</span>`
+              : `${eur(m)} €`;
+            return `<button class="chip" onclick="topup('${a.id}', ${m})">${label}</button>`;
+          }).join('')}
         </div>
       </div>`;
   } else if (a.status === 'awaiting_payment') {

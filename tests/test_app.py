@@ -134,11 +134,16 @@ def test_topup_with_chosen_amount():
     resp = client.post("/api/agents", json={"name": "Choix", "subdomain": "test-choose"}, headers=headers)
     agent_id = resp.json()["agent"]["id"]
 
-    # Recharge de 50 € : le checkout et le crédit valent 50
+    # Recharge de 50 € de crédit : frais de service 10 % par défaut → 55 € à
+    # payer, mais 50 € de crédit IA reçus.
     resp = client.post(f"/api/agents/{agent_id}/topup", json={"amount_eur": 50}, headers=headers)
     assert resp.status_code == 200
-    assert resp.json()["amount_eur"] == 50.0
-    checkout_id = resp.json()["checkout_url"].split("/pay/")[1]
+    data = resp.json()
+    assert data["amount_eur"] == 55.0   # payé, frais inclus
+    assert data["credit_eur"] == 50.0   # crédit IA reçu
+    assert data["fee_eur"] == 5.0
+    checkout_id = data["checkout_url"].split("/pay/")[1]
+    # Le crédit versé reste le montant choisi (pas le montant payé)
     assert client.post(f"/api/pay/{checkout_id}").json()["credited_eur"] == 50.0
     assert client.get(f"/api/agents/{agent_id}", headers=headers).json()["balance_eur"] == 50.0
 
@@ -175,6 +180,59 @@ def test_admin_edits_topup_amounts():
     assert client.put("/api/admin/pricing", json={"topup_amounts_eur": "abc"}, headers=admin).status_code == 400
 
 
+def test_service_fee_default_and_admin_configurable():
+    """Les recharges portent des frais de service (10 % par défaut), que l'admin
+    peut ajuster. Le crédit IA reçu reste le montant choisi."""
+    from app.config import get_settings
+
+    headers = _register("fee-user@example.com")
+    resp = client.post("/api/agents", json={"name": "Fee", "subdomain": "test-fee"}, headers=headers)
+    agent_id = resp.json()["agent"]["id"]
+
+    # Par défaut : 20 € de crédit → 22 € à payer (frais 2 €)
+    resp = client.post(f"/api/agents/{agent_id}/topup", json={"amount_eur": 20}, headers=headers)
+    body = resp.json()
+    assert body["credit_eur"] == 20.0
+    assert body["amount_eur"] == 22.0
+    assert body["fee_eur"] == 2.0
+    assert body["fee_rate"] == 0.10
+    # La page de paiement affiche le total à payer, frais inclus
+    assert "22,00" in client.get(body["checkout_url"]).text
+
+    # L'admin porte les frais à 25 %
+    get_settings().admin_emails = "fee-admin@example.com"
+    client.post("/api/auth/register", json={"email": "fee-admin@example.com", "password": "secret123", "accept_terms": True})
+    tok = client.post("/api/auth/login", json={"email": "fee-admin@example.com", "password": "secret123"}).json()["token"]
+    admin = {"Authorization": f"Bearer {tok}"}
+    resp = client.put("/api/admin/pricing", json={"service_fee_rate": 0.25}, headers=admin)
+    assert resp.status_code == 200
+    assert resp.json()["service_fee_rate"] == 0.25
+
+    # 20 € de crédit → 25 € à payer désormais
+    resp = client.post(f"/api/agents/{agent_id}/topup", json={"amount_eur": 20}, headers=headers)
+    assert resp.json()["amount_eur"] == 25.0
+
+    # Un taux hors bornes (> 1) est refusé ; on rétablit le défaut ensuite
+    assert client.put("/api/admin/pricing", json={"service_fee_rate": 1.5}, headers=admin).status_code == 400
+    client.put("/api/admin/pricing", json={"service_fee_rate": 0.10}, headers=admin)
+
+
+def test_admin_promoted_from_email_list():
+    """Un email présent dans ADMIN_EMAILS est promu admin dès l'inscription,
+    sans étape de connexion séparée (auto-cicatrisation après reset de base)."""
+    from app.config import get_settings
+
+    get_settings().admin_emails = "self-heal-admin@example.com"
+    tok = client.post(
+        "/api/auth/register",
+        json={"email": "self-heal-admin@example.com", "password": "secret123", "accept_terms": True},
+    ).json()["token"]
+    headers = {"Authorization": f"Bearer {tok}"}
+    # Admin immédiatement visible via /me, et l'accès admin est accordé
+    assert client.get("/api/auth/me", headers=headers).json()["is_admin"] is True
+    assert client.put("/api/admin/pricing", json={"deploy_price_eur": 29.0}, headers=headers).status_code == 200
+
+
 def test_pricing_defaults_and_admin_update():
     # Lecture publique des prix (défauts de config)
     resp = client.get("/api/pricing")
@@ -183,6 +241,7 @@ def test_pricing_defaults_and_admin_update():
     assert data["deploy_price_eur"] == 29.0
     assert data["topup_amount_eur"] == 10.0
     assert data["initial_credit_eur"] == 5.0
+    assert data["service_fee_rate"] == 0.10
     assert data["topup_amounts_eur"] == [5.0, 10.0, 20.0, 50.0, 100.0]
 
     # Un utilisateur normal ne peut pas modifier les prix

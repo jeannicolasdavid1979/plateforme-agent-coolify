@@ -3,6 +3,32 @@
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/).
 Les dates suivent l'ordre de développement.
 
+## [Non publié] — Frais de service, admin robuste & persistance
+
+### Ajouté
+- **Frais de service sur les recharges** (`SERVICE_FEE_RATE`, 10 % par défaut,
+  éditable par l'admin de 0 à 100 %) pour financer l'exploitation. Transparent
+  côté client : il choisit un crédit (ex. 10 €), voit le total à payer frais
+  inclus (11 €), et reçoit exactement le crédit choisi (plafond OpenRouter relevé
+  d'autant). `amount_eur` = payé, `credit_eur` = crédité ; la page de paiement et
+  les pastilles de recharge détaillent les deux. Nouveau champ admin « Frais de
+  service ».
+- **Health check** dans `docker-compose.yml` (`GET /health`) : Traefik/Coolify
+  n'aiguillent le trafic qu'une fois l'app prête (supprime l'avertissement
+  Coolify « No health check configured »).
+
+### Corrigé
+- **Promotion admin robuste** : elle s'applique désormais dès l'inscription **et**
+  à chaque requête authentifiée (auto-cicatrisante). Un email d'`ADMIN_EMAILS`
+  devient admin **immédiatement**, sans étape déconnexion/reconnexion, et même
+  après une base repartie de zéro. L'ancienne promotion « à la connexion »
+  (walrus trompeur) est nettoyée.
+- **Persistance** : `DATABASE_URL` pointe explicitement vers un chemin **absolu**
+  du volume (`sqlite:////app/data/orchestrator.db`) — un chemin relatif dépendait
+  du répertoire courant. Documentation du piège Coolify (déploiement
+  Dockerfile/Nixpacks qui ignore le volume) et des deux corrections possibles
+  (type « Docker Compose » ou Persistent Storage sur `/app/data`).
+
 ## [Non publié] — Recharges à montants multiples & correctifs d'exploitation
 
 ### Ajouté

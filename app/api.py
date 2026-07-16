@@ -15,7 +15,14 @@ from .db import get_db
 from .models import Checkout, ProvisioningJob, Setting, Tenant, User
 from .openrouter import get_keys_client
 from .provisioning import ProvisioningEngine
-from .security import create_token, current_user, hash_password, require_admin, verify_password
+from .security import (
+    _is_admin_email,
+    create_token,
+    current_user,
+    hash_password,
+    require_admin,
+    verify_password,
+)
 
 router = APIRouter()
 
@@ -44,6 +51,7 @@ class PricingUpdate(BaseModel):
     deploy_price_eur: float | None = None
     topup_amount_eur: float | None = None
     initial_credit_eur: float | None = None
+    service_fee_rate: float | None = None  # 0.10 = +10 % sur les recharges
     topup_amounts_eur: str | None = None  # liste "5,10,20,50,100"
 
 
@@ -53,7 +61,19 @@ class TopupRequest(BaseModel):
 
 # ── Pricing (variables business) ─────────────────────────────────────
 
-PRICING_KEYS = ("deploy_price_eur", "topup_amount_eur", "initial_credit_eur")
+PRICING_KEYS = (
+    "deploy_price_eur",
+    "topup_amount_eur",
+    "initial_credit_eur",
+    "service_fee_rate",
+)
+
+
+def topup_charge(credit_eur: float, fee_rate: float) -> float:
+    """Montant à régler pour `credit_eur` de crédit IA, frais de service inclus.
+    Le crédit reçu par le client (= plafond OpenRouter relevé) reste `credit_eur` ;
+    la plateforme facture `credit_eur × (1 + fee_rate)`."""
+    return round(credit_eur * (1 + max(fee_rate, 0.0)), 2)
 
 
 def get_pricing(db: Session) -> dict[str, float]:
@@ -139,6 +159,8 @@ def update_pricing(
     for key, value in updates.items():
         if value < 0:
             raise HTTPException(400, f"{key} doit être positif ou nul")
+        if key == "service_fee_rate" and value > 1:
+            raise HTTPException(400, "Le taux de frais doit être entre 0 et 1 (0–100 %)")
         _upsert_setting(db, key, str(value))
     db.commit()
     result = get_pricing(db)
@@ -178,6 +200,10 @@ def register(body: RegisterRequest, db: Session = Depends(get_db)):
         consent_at=datetime.now(timezone.utc),
         consent_version=get_settings().terms_version,
     )
+    # Promotion admin dès l'inscription si l'email est autorisé (le tout
+    # premier compte créé avec un email d'ADMIN_EMAILS est admin immédiatement).
+    if _is_admin_email(user.email):
+        user.is_admin = True
     db.add(user)
     db.commit()
     return {"token": create_token(user), "email": user.email}
@@ -188,10 +214,9 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
     user = db.scalar(select(User).where(User.email == body.email.lower()))
     if not user or not verify_password(body.password, user.password_hash):
         raise HTTPException(401, "Identifiants invalides")
-    # Promote admin if email is in the allowed list
-    from .config import get_settings
-    allowed = {e.strip().lower() for e in get_settings().admin_emails.split(",") if e.strip()}
-    if email_lower := user.email.lower() in allowed and not user.is_admin:
+    # Promotion admin si l'email figure dans ADMIN_EMAILS (le jeton émis
+    # porte alors la revendication admin dès la connexion).
+    if not user.is_admin and _is_admin_email(user.email):
         user.is_admin = True
         db.commit()
     return {"token": create_token(user), "email": user.email}
@@ -342,13 +367,24 @@ def create_topup_checkout(
             "Montant de recharge invalide. Montants proposés : "
             + ", ".join(f"{a:.0f} €" for a in allowed),
         )
+    # Le client reçoit `amount` € de crédit IA (plafond OpenRouter) et règle
+    # ce montant majoré des frais de service. amount_eur = ce qui est payé,
+    # credit_eur = ce qui est crédité — la page de paiement détaille les deux.
+    fee_rate = float(get_pricing(db)["service_fee_rate"])
+    charged = topup_charge(amount, fee_rate)
     checkout = Checkout(
         user_id=user.id, tenant_id=agent_id, kind="topup",
-        amount_eur=amount, credit_eur=amount,
+        amount_eur=charged, credit_eur=amount,
     )
     db.add(checkout)
     db.commit()
-    return {"checkout_url": f"/pay/{checkout.id}", "amount_eur": amount}
+    return {
+        "checkout_url": f"/pay/{checkout.id}",
+        "amount_eur": charged,      # à payer, frais inclus
+        "credit_eur": amount,       # crédit IA reçu
+        "fee_eur": round(charged - amount, 2),
+        "fee_rate": fee_rate,
+    }
 
 
 @router.post("/api/pay/{checkout_id}")
@@ -412,7 +448,16 @@ def pay_page(checkout_id: str, db: Session = Depends(get_db)):
         note_credit = f"{checkout.credit_eur:.2f}".replace(".", ",") + " € de crédit IA offerts au lancement"
     else:
         description = f"Recharge de crédit IA — {tenant.name}"
-        note_credit = f"{checkout.credit_eur:.2f}".replace(".", ",") + " € crédités sur votre agent"
+        fee = round(checkout.amount_eur - checkout.credit_eur, 2)
+        credit_fr = f"{checkout.credit_eur:.2f}".replace(".", ",")
+        if fee > 0:
+            fee_fr = f"{fee:.2f}".replace(".", ",")
+            note_credit = (
+                f"{credit_fr} € de crédit IA crédités sur votre agent "
+                f"(+ {fee_fr} € de frais de service inclus)"
+            )
+        else:
+            note_credit = f"{credit_fr} € crédités sur votre agent"
     return f"""<!doctype html><html lang="fr"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Paiement — Hermes</title>
 <style>

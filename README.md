@@ -153,6 +153,8 @@ Configurées dans Coolify → Application → Environment :
 | `OPENROUTER_API_KEY` | Clé OpenRouter partagée (repli) | `sk-or-v1-...` |
 | `OPENROUTER_PROVISIONING_KEY` | Clé maître de provisioning (crée les clés par agent) | `sk-or-v1-...` |
 | `EUR_USD_RATE` | Conversion crédit € → plafond $ OpenRouter | `1.0` |
+| `SERVICE_FEE_RATE` | Frais de service sur les recharges (`0.10` = +10 %) | `0.10` |
+| `DATABASE_URL` | Emplacement de la base (défaut : volume persistant) | `sqlite:////app/data/orchestrator.db` |
 | `JWT_SECRET` | Secret pour les JWT | `HermesPlatformSecret2026!Kechlab` |
 | `ADMIN_EMAILS` | Emails admin (séparés par virgules) | `david.jn@orange.fr` |
 | `BASE_DOMAIN` | Domaine de base pour les agents | `kechlab.com` |
@@ -165,22 +167,48 @@ Configurées dans Coolify → Application → Environment :
 
 ### Accès administrateur
 
-1. Mettez votre email dans `ADMIN_EMAILS` (ex. `david.jn@orange.fr`), puis
-   redéployez la plateforme.
-2. Créez un compte avec **cet email exact**, ou connectez-vous s'il existe déjà.
-3. La promotion admin est appliquée **à la connexion** : déconnectez-vous puis
-   reconnectez-vous si le compte existait avant l'ajout à la liste.
+1. Mettez votre email dans `ADMIN_EMAILS` (ex. `david.jn@orange.fr`) dans la
+   configuration Coolify, puis redéployez la plateforme.
+2. Créez un compte avec **cet email exact** (ou connectez-vous s'il existe déjà).
+3. La promotion admin est désormais **automatique et immédiate** : dès la
+   première requête authentifiée (chargement du dashboard), le compte dont
+   l'email figure dans `ADMIN_EMAILS` est promu — plus besoin de se
+   déconnecter/reconnecter, et la promotion se ré-applique même après une base
+   repartie de zéro.
 4. Une fois admin, la section **« Réglages business »** apparaît (prix de
-   déploiement, recharge par défaut, crédit offert, **liste des montants de
-   recharge**).
+   déploiement, recharge par défaut, crédit offert, **frais de service**,
+   **liste des montants de recharge**).
+
+### Frais de service sur les recharges
+
+Chaque recharge est facturée avec une marge (`SERVICE_FEE_RATE`, **10 % par
+défaut**) qui finance l'exploitation de la plateforme. Le principe est
+**transparent pour le client** : il choisit un montant de crédit IA (ex. 10 €),
+voit le total à payer frais inclus (ex. 11 €), et reçoit exactement le crédit
+choisi sur son agent (le plafond de sa clé OpenRouter est relevé de 10 €). Le
+taux est modifiable dans **« Réglages business »** (0 à 100 %).
 
 ### Persistance des données (profils, agents, crédits)
 
-La base SQLite vit dans `/app/data/orchestrator.db`, monté sur le **volume
-nommé** `orchestrator-data` (voir `docker-compose.yml`). Ce volume **survit aux
-redéploiements** : comptes, agents, soldes et preuves de consentement sont
-conservés. Les migrations au démarrage ne font qu'**ajouter des colonnes**
-(jamais de perte). Ne supprimez pas ce volume — c'est la seule copie des données.
+La base SQLite vit dans `/app/data/orchestrator.db` (chemin absolu défini par
+`DATABASE_URL`), monté sur le **volume nommé** `orchestrator-data`. Ce volume
+survit aux redéploiements ; les migrations au démarrage ne font qu'**ajouter des
+colonnes** (jamais de perte).
+
+> ⚠️ **Si vos comptes disparaissent à chaque redéploiement**, c'est que le
+> volume n'est pas monté — Coolify a probablement déployé l'orchestrateur comme
+> une **application Dockerfile/Nixpacks**, qui ignore les volumes du
+> `docker-compose.yml`. Deux façons de corriger, au choix :
+>
+> 1. **Déployer en tant que « Docker Compose »** dans Coolify (type de ressource
+>    qui lit ce `docker-compose.yml`, volume `orchestrator-data` inclus) ; **ou**
+> 2. Sur l'application existante : **Coolify → l'app → Persistent Storage →
+>    Add → chemin `/app/data`**. Le montage rend la base persistante sans
+>    changer le type de déploiement.
+>
+> Après correction, refaites votre compte admin une dernière fois : il sera
+> ensuite conservé d'un déploiement à l'autre. Ne supprimez jamais ce volume —
+> c'est la seule copie des données.
 
 ## API Endpoints
 
@@ -293,8 +321,9 @@ curl -X POST https://plateformeagentcoolify.kechlab.com/api/auth/register \
 ```
 
 L'email doit être dans `ADMIN_EMAILS` pour avoir les droits admin ; la
-promotion est appliquée à la connexion (voir « Accès administrateur »).
-Le champ `accept_terms` est obligatoire (consentement RGPD).
+promotion est **automatique dès la première requête authentifiée** (voir
+« Accès administrateur »). Le champ `accept_terms` est obligatoire (consentement
+RGPD).
 
 ## Modèles supportés (via OpenRouter)
 

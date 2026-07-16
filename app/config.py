@@ -40,6 +40,10 @@ class Settings(BaseSettings):
     deploy_price_eur: float = 29.0
     topup_amount_eur: float = 10.0  # montant proposé par défaut
     initial_credit_eur: float = 5.0
+    # Frais de service prélevés sur les recharges (finance l'exploitation de la
+    # plateforme). 0.10 = +10 % : le client reçoit 10 € de crédit IA et règle
+    # 11 €. Modifiable par l'admin ; borné à 0–100 %.
+    service_fee_rate: float = 0.10
     # Montants de recharge proposés au client (liste, en euros). Chaque euro
     # rechargé relève d'autant le plafond de la clé OpenRouter dédiée.
     topup_amounts_eur: str = "5,10,20,50,100"

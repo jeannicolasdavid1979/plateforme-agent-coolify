@@ -67,6 +67,13 @@ def current_user(
     user = db.get(User, payload.get("sub", ""))
     if not user:
         raise HTTPException(status_code=401, detail="Utilisateur inconnu")
+    # Promotion admin auto-cicatrisante : dès qu'un email figure dans
+    # ADMIN_EMAILS, le compte est promu à la première requête authentifiée —
+    # y compris après une ré-inscription (base repartie de zéro). Évite de
+    # dépendre du moment exact (register vs login) où la promotion a lieu.
+    if not user.is_admin and _is_admin_email(user.email):
+        user.is_admin = True
+        db.commit()
     return user
 
 
