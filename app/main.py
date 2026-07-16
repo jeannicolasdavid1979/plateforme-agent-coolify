@@ -29,6 +29,38 @@ app.add_middleware(
 @app.on_event("startup")
 def _startup():
     init_db()
+    _start_hosting_sweeper()
+
+
+def _start_hosting_sweeper():
+    """Tâche de fond : applique le cycle de vie de l'hébergement (suspension des
+    échéances dépassées, suppression après rétention) toutes les heures. Best
+    effort — les erreurs sont journalisées sans interrompre la boucle."""
+    import asyncio
+
+    async def _loop():
+        from .api import enforce_hosting
+        from .db import SessionFactory
+
+        while True:
+            try:
+                db = SessionFactory()
+                try:
+                    changed = enforce_hosting(db)
+                    if changed:
+                        logging.getLogger("hosting").info("Cycle de vie : %d agent(s) mis à jour", changed)
+                finally:
+                    db.close()
+            except Exception:  # noqa: BLE001
+                logging.getLogger("hosting").exception("Balayage hébergement échoué")
+            await asyncio.sleep(3600)
+
+    try:
+        asyncio.get_event_loop().create_task(_loop())
+    except RuntimeError:
+        # Pas de boucle asyncio (contexte de test synchrone) — le balayage
+        # reste déclenchable via /api/admin/enforce-hosting.
+        pass
 
 
 @app.get("/health")

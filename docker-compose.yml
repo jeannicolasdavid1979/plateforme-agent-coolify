@@ -20,6 +20,9 @@ services:
       # Frais de service sur les recharges (0.10 = +10 %). Modifiable ensuite
       # depuis l'interface admin (Réglages business).
       SERVICE_FEE_RATE: ${SERVICE_FEE_RATE:-0.10}
+      # Stripe : secret de signature du webhook (les liens de paiement, eux, se
+      # saisissent dans l'admin). Vérifie l'authenticité des événements reçus.
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
       # Noms alignés sur app/config.py (env_prefix vide) — sinon l'admin
       # n'est jamais promu et le JWT reste sur sa valeur par défaut.
       JWT_SECRET: ${JWT_SECRET:-change-me}

@@ -14,10 +14,12 @@ from __future__ import annotations
 
 from datetime import date
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import HTMLResponse
+from sqlalchemy.orm import Session
 
 from .config import get_settings
+from .db import get_db
 
 router = APIRouter()
 
@@ -203,8 +205,17 @@ plafonnée par client.</p>
 
 
 @router.get("/legal/cgv", response_class=HTMLResponse)
-def cgv():
+def cgv(db: Session = Depends(get_db)):
     s = get_settings()
+    # Montants réellement appliqués (défauts de config surchargés par l'admin).
+    from .api import get_pricing
+    p = get_pricing(db)
+    monthly = f"{p['hosting_price_eur']:.2f}".replace(".", ",")
+    annual = f"{p['hosting_annual_price_eur']:.2f}".replace(".", ",")
+    retention = int(p["hosting_retention_days"])
+    grace = int(p["hosting_grace_days"])
+    grace_txt = (f" Un délai de grâce de {grace} jour(s) suit l'échéance avant suspension."
+                 if grace > 0 else "")
     body = f"""
 <h1>Conditions générales de vente et d'utilisation</h1>
 <p class="updated">Version du {s.terms_version}.</p>
@@ -227,44 +238,66 @@ cas échéant. L'éditeur peut modifier ses tarifs à tout moment ; le prix
 applicable est celui affiché lors de la commande. Un crédit d'IA offert peut
 accompagner le premier déploiement.</p>
 
-<h2>4. Paiement</h2>
+<h2>4. Hébergement et abonnement récurrent</h2>
+<p>Chaque agent déployé est hébergé contre un <strong>abonnement d'hébergement</strong>.
+Le premier mois est inclus dans le déploiement. À l'échéance, l'abonnement doit
+être renouvelé pour maintenir l'agent en ligne, au choix :</p>
+<ul>
+  <li><strong>Mensuel</strong> : {monthly} € par mois, renouvellement avant la date
+  anniversaire mensuelle. Un compte à rebours vous indique le temps restant.</li>
+  <li><strong>Annuel</strong> : {annual} € pour douze mois.</li>
+</ul>
+<p>À défaut de renouvellement à la date anniversaire, l'agent est
+<strong>suspendu</strong> (conteneurs arrêtés, accès interrompu).{grace_txt} Les
+données sont alors <strong>conservées {retention} jours</strong>, pendant lesquels
+le compte reste <strong>restaurable</strong> après régularisation (par vous via un
+paiement, ou par l'éditeur). Passé ce délai de {retention} jours de retard, l'agent
+et ses données sont <strong>supprimés définitivement</strong>, sans possibilité de
+restauration. La suspension ne donne lieu à aucun remboursement du crédit d'IA
+restant. Vous pouvez résilier à tout moment en cessant de renouveler ; aucun
+prélèvement n'intervient sans une action de paiement de votre part, sauf si vous
+avez souscrit un abonnement à débit automatique, résiliable depuis votre espace.</p>
+
+<h2>5. Paiement</h2>
 <p>Le paiement s'effectue en ligne au moment de la commande. Le déploiement de
 l'agent est déclenché après confirmation du paiement. Les crédits d'IA
 alimentent une clé dédiée, plafonnée, permettant à l'agent d'appeler les
-modèles ; ils sont consommés à l'usage.</p>
+modèles ; ils sont consommés à l'usage. Un supplément de frais de service peut
+s'appliquer aux recharges ; il est affiché avant paiement.</p>
 
-<h2>5. Droit de rétractation</h2>
+<h2>6. Droit de rétractation</h2>
 <p>Le service étant fourni immédiatement et de manière personnalisée après
 paiement, vous demandez expressément son exécution immédiate et reconnaissez,
 conformément à l'article L221-28 du Code de la consommation, renoncer à votre
 droit de rétractation une fois le déploiement lancé. Le crédit d'IA non
 consommé n'est pas remboursable et est perdu en cas de suppression de l'agent.</p>
 
-<h2>6. Disponibilité</h2>
+<h2>7. Disponibilité</h2>
 <p>Le service est fourni « en l'état », selon une obligation de moyens. Des
 interruptions peuvent survenir (maintenance, incident d'hébergement, panne des
 fournisseurs de modèles). La mise en ligne d'un agent inclut une phase de
 convergence (routage, certificat) de quelques minutes.</p>
 
-<h2>7. Usages interdits</h2>
+<h2>8. Usages interdits</h2>
 <p>Il est interdit d'utiliser un agent à des fins illicites, pour produire des
 contenus contraires à la loi, porter atteinte aux droits de tiers, ou
 contourner les plafonds et l'isolation du service. Tout manquement peut
 entraîner la suspension ou la suppression du compte sans remboursement.</p>
 
-<h2>8. Responsabilité</h2>
+<h2>9. Responsabilité</h2>
 <p>Les réponses des agents sont générées par des modèles d'IA et peuvent
 comporter des erreurs ; elles ne constituent pas un conseil professionnel.
 Vous restez responsable de l'usage que vous faites des contenus produits.
 La responsabilité de l'éditeur est limitée au montant des sommes versées au
 titre de la prestation concernée.</p>
 
-<h2>9. Résiliation</h2>
+<h2>10. Résiliation</h2>
 <p>Vous pouvez supprimer un agent ou votre compte à tout moment depuis le
-tableau de bord. La suppression est définitive et entraîne la destruction des
+tableau de bord, ou résilier en cessant de renouveler l'abonnement d'hébergement
+(voir article 4). La suppression est définitive et entraîne la destruction des
 données et des crédits associés.</p>
 
-<h2>10. Droit applicable</h2>
+<h2>11. Droit applicable</h2>
 <p>Les présentes conditions sont soumises au droit français. À défaut de
 résolution amiable, les tribunaux français sont compétents. Contact :
 <a href="mailto:{s.legal_contact_email}">{s.legal_contact_email}</a>.</p>

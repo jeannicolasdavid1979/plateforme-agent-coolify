@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from sqlalchemy import delete as sa_delete, select
@@ -12,9 +12,11 @@ from sqlalchemy.orm import Session
 from .config import get_settings
 from .coolify import get_client
 from .db import get_db
+from .hosting import extend_period, hosting_status
 from .models import Checkout, ProvisioningJob, Setting, Tenant, User
 from .openrouter import get_keys_client
 from .provisioning import ProvisioningEngine
+from . import stripe_pay
 from .security import (
     _is_admin_email,
     create_token,
@@ -52,11 +54,26 @@ class PricingUpdate(BaseModel):
     topup_amount_eur: float | None = None
     initial_credit_eur: float | None = None
     service_fee_rate: float | None = None  # 0.10 = +10 % sur les recharges
+    hosting_price_eur: float | None = None
+    hosting_annual_price_eur: float | None = None
+    hosting_grace_days: float | None = None
+    hosting_retention_days: float | None = None
     topup_amounts_eur: str | None = None  # liste "5,10,20,50,100"
 
 
 class TopupRequest(BaseModel):
     amount_eur: float | None = None  # None → montant par défaut
+
+
+class HostingRequest(BaseModel):
+    plan: str = "monthly"  # "monthly" | "annual"
+
+
+class StripeLinksUpdate(BaseModel):
+    deploy: str | None = None
+    hosting_monthly: str | None = None
+    hosting_annual: str | None = None
+    topup: dict[str, str] | None = None  # {"10": "https://buy.stripe.com/...", ...}
 
 
 # ── Pricing (variables business) ─────────────────────────────────────
@@ -66,6 +83,10 @@ PRICING_KEYS = (
     "topup_amount_eur",
     "initial_credit_eur",
     "service_fee_rate",
+    "hosting_price_eur",
+    "hosting_annual_price_eur",
+    "hosting_grace_days",
+    "hosting_retention_days",
 )
 
 
@@ -235,7 +256,8 @@ def list_agents(user: User = Depends(current_user), db: Session = Depends(get_db
     # include_secrets : la liste ne renvoie que les agents de l'utilisateur,
     # le mot de passe est affiché (masqué) sur sa carte avec bouton copier.
     agents = db.scalars(select(Tenant).where(Tenant.user_id == user.id)).all()
-    return {"agents": [_agent_dict(a, include_secrets=True) for a in agents]}
+    cfg = _hosting_cfg(db)
+    return {"agents": [_agent_dict(a, include_secrets=True, hosting_cfg=cfg) for a in agents]}
 
 
 @router.post("/api/agents")
@@ -289,7 +311,7 @@ def get_agent(agent_id: str, user: User = Depends(current_user), db: Session = D
     agent = db.get(Tenant, agent_id)
     if not agent or agent.user_id != user.id:
         raise HTTPException(404, "Agent non trouvé")
-    d = _agent_dict(agent, include_secrets=True)
+    d = _agent_dict(agent, include_secrets=True, hosting_cfg=_hosting_cfg(db))
     # Consommation réelle de la clé OpenRouter dédiée (qui paye quoi)
     if agent.openrouter_key_hash:
         keys = get_keys_client()
@@ -342,7 +364,7 @@ def get_or_create_deploy_checkout(
         )
         db.add(checkout)
         db.commit()
-    return {"checkout_url": f"/pay/{checkout.id}"}
+    return {"checkout_url": _checkout_url(db, checkout, email=user.email)}
 
 
 @router.post("/api/agents/{agent_id}/topup")
@@ -379,12 +401,128 @@ def create_topup_checkout(
     db.add(checkout)
     db.commit()
     return {
-        "checkout_url": f"/pay/{checkout.id}",
+        "checkout_url": _checkout_url(db, checkout, email=user.email, amount_eur=amount),
         "amount_eur": charged,      # à payer, frais inclus
         "credit_eur": amount,       # crédit IA reçu
         "fee_eur": round(charged - amount, 2),
         "fee_rate": fee_rate,
     }
+
+
+@router.post("/api/agents/{agent_id}/hosting")
+def create_hosting_checkout(
+    agent_id: str,
+    body: HostingRequest | None = None,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+):
+    """Renouvelle (ou souscrit) l'abonnement d'hébergement de l'agent : mensuel
+    (19 €) ou annuel. Crée un Checkout `hosting` et renvoie le lien de paiement
+    (Stripe si configuré, sinon page simulée)."""
+    agent = db.get(Tenant, agent_id)
+    if not agent or agent.user_id != user.id:
+        raise HTTPException(404, "Agent non trouvé")
+    plan = (body.plan if body else "monthly") or "monthly"
+    if plan not in ("monthly", "annual"):
+        raise HTTPException(400, "Plan invalide (monthly ou annual)")
+    p = get_pricing(db)
+    price = p["hosting_annual_price_eur"] if plan == "annual" else p["hosting_price_eur"]
+    checkout = Checkout(
+        user_id=user.id, tenant_id=agent_id, kind="hosting",
+        amount_eur=round(float(price), 2), credit_eur=0.0,
+    )
+    db.add(checkout)
+    db.commit()
+    return {
+        "checkout_url": _checkout_url(db, checkout, email=user.email, plan=plan),
+        "plan": plan,
+        "amount_eur": round(float(price), 2),
+    }
+
+
+def _checkout_url(db: Session, checkout: Checkout, *, email: str | None,
+                  amount_eur: float | None = None, plan: str | None = None) -> str:
+    """Lien Stripe configuré pour ce paiement, sinon page de paiement simulée."""
+    url = stripe_pay.checkout_redirect_url(
+        db, checkout_id=checkout.id, kind=checkout.kind,
+        amount_eur=amount_eur, plan=plan, email=email,
+    )
+    return url or f"/pay/{checkout.id}"
+
+
+def _apply_paid_checkout(db: Session, checkout: Checkout) -> Tenant | None:
+    """Applique un paiement réglé (page simulée ou webhook Stripe). Idempotent :
+    ne fait rien si le checkout est déjà payé."""
+    if checkout.status == "paid":
+        return db.get(Tenant, checkout.tenant_id)
+    tenant = db.get(Tenant, checkout.tenant_id)
+    if not tenant:
+        return None
+
+    checkout.status = "paid"
+    tenant.balance_eur = (tenant.balance_eur or 0.0) + (checkout.credit_eur or 0.0)
+
+    if checkout.kind == "deploy" and tenant.status == "awaiting_payment":
+        # Le déploiement inclut le premier mois d'hébergement.
+        tenant.hosting_plan = "monthly"
+        tenant.hosting_paid_until = extend_period(None, 1)
+        tenant.suspended_at = None
+        tenant.status = "pending"
+        db.commit()
+        engine = ProvisioningEngine(db)
+        job = engine.create_job(tenant)
+        engine.run_job_async(job.id)
+        return tenant
+
+    if checkout.kind == "hosting":
+        # Plan déduit du montant : annuel si == prix annuel configuré, sinon mensuel.
+        plan = "annual" if _is_annual(checkout, db) else "monthly"
+        months = 12 if plan == "annual" else 1
+        tenant.hosting_plan = plan
+        tenant.hosting_paid_until = extend_period(tenant.hosting_paid_until, months)
+        _resume_if_suspended(db, tenant)
+        db.commit()
+        return tenant
+
+    db.commit()
+    # Recharge : relever le plafond de la clé OpenRouter dédiée du même montant.
+    if checkout.kind == "topup" and tenant.openrouter_key_hash:
+        keys = get_keys_client()
+        if keys:
+            try:
+                keys.add_credit(
+                    tenant.openrouter_key_hash,
+                    checkout.credit_eur * get_settings().eur_usd_rate,
+                )
+            except Exception as exc:
+                import logging
+                logging.getLogger("api").warning(
+                    "Recharge OpenRouter échouée pour %s : %s — solde local crédité, "
+                    "relever le plafond manuellement", tenant.name, exc,
+                )
+    return tenant
+
+
+def _is_annual(checkout: Checkout, db: Session | None = None) -> bool:
+    """Un checkout d'hébergement est annuel si son montant == prix annuel."""
+    if db is None:
+        return False
+    try:
+        annual = float(get_pricing(db)["hosting_annual_price_eur"])
+    except Exception:
+        return False
+    return round(checkout.amount_eur, 2) == round(annual, 2)
+
+
+def _resume_if_suspended(db: Session, tenant: Tenant) -> None:
+    """Réactive un agent suspendu après paiement d'hébergement (relance Coolify)."""
+    if tenant.suspended_at is None:
+        return
+    tenant.suspended_at = None
+    if tenant.coolify_service_uuid:
+        client = get_client()
+        if client:
+            client.start_service(tenant.coolify_service_uuid)
 
 
 @router.post("/api/pay/{checkout_id}")
@@ -395,38 +533,59 @@ def pay(checkout_id: str, db: Session = Depends(get_db)):
         raise HTTPException(404, "Session de paiement inconnue ou expirée")
     if checkout.status == "paid":
         raise HTTPException(409, "Session déjà payée")
-    tenant = db.get(Tenant, checkout.tenant_id)
+    tenant = _apply_paid_checkout(db, checkout)
     if not tenant:
         raise HTTPException(404, "Agent introuvable")
-
-    checkout.status = "paid"
-    tenant.balance_eur = (tenant.balance_eur or 0.0) + checkout.credit_eur
-    if checkout.kind == "deploy" and tenant.status == "awaiting_payment":
-        tenant.status = "pending"
-        db.commit()
-        engine = ProvisioningEngine(db)
-        job = engine.create_job(tenant)
-        engine.run_job_async(job.id)
-    else:
-        db.commit()
-        # Recharge : relever le plafond de la clé OpenRouter dédiée du même
-        # montant — c'est elle qui matérialise le crédit du client.
-        if checkout.kind == "topup" and tenant.openrouter_key_hash:
-            keys = get_keys_client()
-            if keys:
-                from .config import get_settings
-                try:
-                    keys.add_credit(
-                        tenant.openrouter_key_hash,
-                        checkout.credit_eur * get_settings().eur_usd_rate,
-                    )
-                except Exception as exc:
-                    import logging
-                    logging.getLogger("api").warning(
-                        "Recharge OpenRouter échouée pour %s : %s — solde local crédité, "
-                        "relever le plafond manuellement", tenant.name, exc,
-                    )
     return {"status": "paid", "kind": checkout.kind, "credited_eur": checkout.credit_eur}
+
+
+@router.post("/api/stripe/webhook")
+async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
+    """Reçoit les événements Stripe. `checkout.session.completed` crédite le
+    Checkout local identifié par `client_reference_id` (déploiement, recharge,
+    hébergement). `invoice.paid` prolonge un abonnement auto-débité, retrouvé
+    par `stripe_subscription_id`. Signature vérifiée si un secret est configuré."""
+    import json as _json
+
+    payload = await request.body()
+    sig = request.headers.get("stripe-signature", "")
+    secret = get_settings().stripe_webhook_secret
+    if not stripe_pay.verify_signature(payload, sig, secret):
+        raise HTTPException(400, "Signature Stripe invalide")
+    try:
+        event = _json.loads(payload)
+    except _json.JSONDecodeError:
+        raise HTTPException(400, "Corps d'événement illisible")
+
+    etype = event.get("type", "")
+    obj = event.get("data", {}).get("object", {})
+
+    if etype == "checkout.session.completed":
+        ref = obj.get("client_reference_id")
+        if ref:
+            checkout = db.get(Checkout, ref)
+            if checkout and checkout.status != "paid":
+                tenant = _apply_paid_checkout(db, checkout)
+                # Mémorise l'abonnement Stripe (mode auto) pour les renouvellements.
+                sub = obj.get("subscription")
+                if tenant and sub and checkout.kind == "hosting":
+                    tenant.stripe_subscription_id = sub
+                    db.commit()
+        return {"received": True}
+
+    if etype == "invoice.paid":
+        sub = obj.get("subscription")
+        if sub:
+            tenant = db.scalar(select(Tenant).where(Tenant.stripe_subscription_id == sub))
+            if tenant:
+                # Renouvellement auto : prolonge d'un mois et réactive si suspendu.
+                tenant.hosting_plan = "monthly"
+                tenant.hosting_paid_until = extend_period(tenant.hosting_paid_until, 1)
+                _resume_if_suspended(db, tenant)
+                db.commit()
+        return {"received": True}
+
+    return {"received": True, "ignored": etype}
 
 
 @router.get("/pay/{checkout_id}", response_class=HTMLResponse)
@@ -445,7 +604,12 @@ def pay_page(checkout_id: str, db: Session = Depends(get_db)):
     amount = f"{checkout.amount_eur:.2f}".replace(".", ",")
     if checkout.kind == "deploy":
         description = f"Déploiement de l'agent « {tenant.name} »"
-        note_credit = f"{checkout.credit_eur:.2f}".replace(".", ",") + " € de crédit IA offerts au lancement"
+        note_credit = f"{checkout.credit_eur:.2f}".replace(".", ",") + " € de crédit IA offerts au lancement (1er mois d'hébergement inclus)"
+    elif checkout.kind == "hosting":
+        annual = _is_annual(checkout, db)
+        description = f"Hébergement {'annuel' if annual else 'mensuel'} — {tenant.name}"
+        note_credit = ("Hébergement prolongé de 12 mois" if annual
+                       else "Hébergement prolongé d'un mois")
     else:
         description = f"Recharge de crédit IA — {tenant.name}"
         fee = round(checkout.amount_eur - checkout.credit_eur, 2)
@@ -596,6 +760,8 @@ def export_account(user: User = Depends(current_user), db: Session = Depends(get
                 "model": a.model, "system_prompt": a.system_prompt,
                 "status": a.status, "balance_eur": a.balance_eur or 0.0,
                 "url": a.instance_url,
+                "hosting_plan": a.hosting_plan or "none",
+                "hosting_paid_until": a.hosting_paid_until.isoformat() if a.hosting_paid_until else None,
                 "created_at": a.created_at.isoformat() if a.created_at else None,
             }
             for a in agents
@@ -631,7 +797,95 @@ def delete_account(user: User = Depends(current_user), db: Session = Depends(get
 @router.get("/api/admin/agents")
 def list_all_agents(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
     agents = db.scalars(select(Tenant)).all()
-    return {"agents": [_agent_dict(a) for a in agents]}
+    cfg = _hosting_cfg(db)
+    return {"agents": [_agent_dict(a, hosting_cfg=cfg) for a in agents]}
+
+
+@router.get("/api/admin/stripe")
+def get_stripe_links(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Liens de paiement Stripe configurés + état du secret de webhook."""
+    return {
+        "links": stripe_pay.get_links(db),
+        "webhook_configured": bool(get_settings().stripe_webhook_secret),
+        "webhook_url": "/api/stripe/webhook",
+    }
+
+
+@router.put("/api/admin/stripe")
+def update_stripe_links(
+    body: StripeLinksUpdate,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Enregistre les liens Stripe (déploiement, hébergement mensuel/annuel,
+    recharges par montant). Un champ absent (None) n'est pas modifié."""
+    import json as _json
+
+    if body.deploy is not None:
+        _upsert_setting(db, stripe_pay.LINK_KEYS["deploy"], body.deploy.strip())
+    if body.hosting_monthly is not None:
+        _upsert_setting(db, stripe_pay.LINK_KEYS["hosting_monthly"], body.hosting_monthly.strip())
+    if body.hosting_annual is not None:
+        _upsert_setting(db, stripe_pay.LINK_KEYS["hosting_annual"], body.hosting_annual.strip())
+    if body.topup is not None:
+        clean = {str(k): str(v).strip() for k, v in body.topup.items() if str(v).strip()}
+        _upsert_setting(db, stripe_pay.TOPUP_LINKS_KEY, _json.dumps(clean))
+    db.commit()
+    return {"links": stripe_pay.get_links(db)}
+
+
+@router.post("/api/admin/agents/{agent_id}/restore")
+def restore_agent(agent_id: str, admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Restaure un agent suspendu (moins d'un mois de retard) : relance les
+    conteneurs et repousse l'échéance d'un mois offert le temps de régulariser."""
+    agent = db.get(Tenant, agent_id)
+    if not agent:
+        raise HTTPException(404, "Agent non trouvé")
+    if agent.suspended_at is None:
+        raise HTTPException(409, "Cet agent n'est pas suspendu")
+    agent.hosting_paid_until = extend_period(None, 1)
+    _resume_if_suspended(db, agent)
+    db.commit()
+    return {"status": "restored", "hosting": _agent_dict(agent, hosting_cfg=_hosting_cfg(db))["hosting"]}
+
+
+@router.post("/api/admin/enforce-hosting")
+def admin_enforce_hosting(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Déclenche manuellement le balayage (suspension des échus, suppression des
+    dépassements de rétention). Utile pour vérifier sans attendre la tâche de fond."""
+    return {"changed": enforce_hosting(db)}
+
+
+def enforce_hosting(db: Session, now=None) -> int:
+    """Applique le cycle de vie de l'hébergement sur tous les agents :
+    - échéance (+grâce) dépassée et non encore suspendu → suspend (stop Coolify) ;
+    - rétention dépassée depuis la suspension → suppression définitive.
+    Retourne le nombre d'agents modifiés."""
+    from datetime import datetime, timezone
+
+    now = now or datetime.now(timezone.utc)
+    grace, retention = _hosting_cfg(db)
+    changed = 0
+    for agent in list(db.scalars(select(Tenant)).all()):
+        if agent.hosting_paid_until is None and agent.suspended_at is None:
+            continue
+        st = hosting_status(agent.hosting_paid_until, agent.suspended_at, grace, retention, now)
+        if st.state in ("suspended", "deletable") and agent.suspended_at is None:
+            # Ancre la suspension à la date d'échéance réelle (pas « maintenant »),
+            # pour ne pas rallonger la fenêtre de restauration si le balayage tarde.
+            agent.suspended_at = st.suspend_at
+            if agent.coolify_service_uuid:
+                client = get_client()
+                if client:
+                    client.stop_service(agent.coolify_service_uuid)
+            changed += 1
+            st = hosting_status(agent.hosting_paid_until, agent.suspended_at, grace, retention, now)
+        if st.state == "deletable":
+            _purge_tenant(db, agent)
+            changed += 1
+    if changed:
+        db.commit()
+    return changed
 
 
 @router.post("/api/admin/agents/{agent_id}/redeploy")
@@ -650,7 +904,14 @@ def redeploy(agent_id: str, admin: User = Depends(require_admin), db: Session = 
 # ── Helpers ──────────────────────────────────────────────────────────
 
 
-def _agent_dict(a: Tenant, include_secrets: bool = False) -> dict:
+def _hosting_cfg(db: Session) -> tuple[int, int]:
+    """(jours de grâce, jours de rétention) — défauts config surchargés par l'admin."""
+    p = get_pricing(db)
+    return int(p["hosting_grace_days"]), int(p["hosting_retention_days"])
+
+
+def _agent_dict(a: Tenant, include_secrets: bool = False,
+                hosting_cfg: tuple[int, int] | None = None) -> dict:
     d = {
         "id": a.id,
         "name": a.name,
@@ -660,6 +921,17 @@ def _agent_dict(a: Tenant, include_secrets: bool = False) -> dict:
         "url": a.instance_url,
         "balance_eur": a.balance_eur or 0.0,
         "created_at": a.created_at.isoformat() if a.created_at else None,
+    }
+    grace, retention = hosting_cfg or (0, 30)
+    st = hosting_status(a.hosting_paid_until, a.suspended_at, grace, retention)
+    d["hosting"] = {
+        "plan": a.hosting_plan or "none",
+        "state": st.state,
+        "paid_until": st.paid_until.isoformat() if st.paid_until else None,
+        "suspend_at": st.suspend_at.isoformat() if st.suspend_at else None,
+        "delete_at": st.delete_at.isoformat() if st.delete_at else None,
+        "seconds_left": st.seconds_left,
+        "suspended": a.suspended_at is not None,
     }
     if include_secrets:
         d["password"] = a.instance_password

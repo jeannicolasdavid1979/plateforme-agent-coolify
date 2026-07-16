@@ -56,6 +56,15 @@ class Tenant(Base):
     instance_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
     instance_password: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
+    # Abonnement d'hébergement (revenu récurrent). L'agent doit être « payé »
+    # jusqu'à hosting_paid_until ; passé cette date sans renouvellement, il est
+    # suspendu (conteneurs arrêtés) puis supprimé après la période de rétention.
+    hosting_plan: Mapped[str] = mapped_column(String(16), default="none")  # none|monthly|annual
+    hosting_paid_until: Mapped[datetime | None] = mapped_column(nullable=True)
+    suspended_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    # Abonnement Stripe auto-débité (mode auto) : sert à prolonger sur invoice.paid
+    stripe_subscription_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
     # Clé OpenRouter dédiée (créée via la clé maître de provisioning)
     openrouter_api_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
     openrouter_key_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)

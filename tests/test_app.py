@@ -756,3 +756,233 @@ def test_legal_pages_render():
     assert "portabilité" in body and "CNIL" in body
     # Les mentions légales exposent l'hébergeur
     assert "Hetzner" in client.get("/legal/mentions").text
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  Hébergement récurrent, cycle de vie FOMO, et paiements Stripe
+# ══════════════════════════════════════════════════════════════════════
+
+def _admin(email="ops@example.com"):
+    from app.config import get_settings
+    get_settings().admin_emails = email
+    tok = client.post(
+        "/api/auth/register",
+        json={"email": email, "password": "secret123", "accept_terms": True},
+    ).json()["token"]
+    return {"Authorization": f"Bearer {tok}"}
+
+
+def _running_agent(email, subdomain, **kw):
+    """Crée directement un agent 'running' avec service Coolify (bypass paiement)."""
+    from sqlalchemy import select
+    from app.db import SessionFactory
+    from app.models import Tenant, User
+
+    db = SessionFactory()
+    user = db.scalar(select(User).where(User.email == email))
+    if not user:
+        user = User(email=email, password_hash="h"); db.add(user); db.commit()
+    tenant = Tenant(
+        user_id=user.id, name=subdomain, subdomain=subdomain,
+        status="running", coolify_service_uuid="svc-" + subdomain, **kw,
+    )
+    db.add(tenant); db.commit()
+    tid = tenant.id
+    db.close()
+    return tid
+
+
+def test_hosting_status_transitions():
+    from datetime import datetime, timedelta, timezone
+    from app.hosting import hosting_status
+
+    now = datetime(2026, 7, 16, tzinfo=timezone.utc)
+    # Actif : échéance dans le futur
+    st = hosting_status(now + timedelta(days=5), None, grace_days=0, retention_days=30, now=now)
+    assert st.state == "active" and st.seconds_left == 5 * 86400
+    # Grâce : échéance dépassée mais dans la fenêtre de grâce
+    st = hosting_status(now - timedelta(days=1), None, grace_days=3, retention_days=30, now=now)
+    assert st.state == "grace"
+    # Échéance + grâce dépassées, pas encore marqué suspendu → suspended
+    st = hosting_status(now - timedelta(days=5), None, grace_days=3, retention_days=30, now=now)
+    assert st.state == "suspended"
+    # Suspendu depuis 40 j, rétention 30 → deletable
+    st = hosting_status(now - timedelta(days=45), now - timedelta(days=40),
+                        grace_days=0, retention_days=30, now=now)
+    assert st.state == "deletable"
+
+
+def test_deploy_includes_first_hosting_month():
+    from app.db import SessionFactory
+    from app.models import Tenant
+
+    headers = _register("deployhost@example.com")
+    agent_id = client.post("/api/agents", json={"name": "H", "subdomain": "test-host"},
+                           headers=headers).json()["agent"]["id"]
+    checkout_url = client.post(f"/api/agents/{agent_id}/checkout", headers=headers).json()["checkout_url"]
+    cid = checkout_url.split("/pay/")[1]
+    assert client.post(f"/api/pay/{cid}").status_code == 200
+
+    db = SessionFactory()
+    agent = db.get(Tenant, agent_id)
+    assert agent.hosting_plan == "monthly"
+    assert agent.hosting_paid_until is not None
+    db.close()
+    # L'API expose l'état d'hébergement
+    h = client.get(f"/api/agents/{agent_id}", headers=headers).json()["hosting"]
+    assert h["state"] == "active" and h["plan"] == "monthly"
+
+
+def test_hosting_renewal_extends_period():
+    from datetime import datetime, timezone
+    from app.db import SessionFactory
+    from app.models import Tenant
+
+    headers = _register("renew@example.com")  # crée le compte…
+    agent_id = _running_agent("renew@example.com", "test-renew",
+                              hosting_plan="monthly")  # …puis un agent pour ce compte
+    # Renouvellement mensuel
+    resp = client.post(f"/api/agents/{agent_id}/hosting", json={"plan": "monthly"}, headers=headers)
+    assert resp.json()["amount_eur"] == 19.0
+    cid = resp.json()["checkout_url"].split("/pay/")[1]
+    assert client.post(f"/api/pay/{cid}").status_code == 200
+
+    db = SessionFactory()
+    agent = db.get(Tenant, agent_id)
+    delta = (agent.hosting_paid_until.replace(tzinfo=timezone.utc) - datetime.now(timezone.utc)).days
+    assert 28 <= delta <= 31  # ~1 mois
+    db.close()
+
+    # Annuel : montant = prix annuel, ~12 mois
+    resp = client.post(f"/api/agents/{agent_id}/hosting", json={"plan": "annual"}, headers=headers)
+    assert resp.json()["amount_eur"] == 190.0
+    cid = resp.json()["checkout_url"].split("/pay/")[1]
+    client.post(f"/api/pay/{cid}")
+    db = SessionFactory()
+    agent = db.get(Tenant, agent_id)
+    assert agent.hosting_plan == "annual"
+    db.close()
+
+
+def test_enforce_suspends_then_deletes(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    from app import api
+    from app.db import SessionFactory
+    from app.models import Tenant
+
+    stops = []
+
+    class FakeClient:
+        def stop_service(self, uuid): stops.append(uuid); return True
+        def start_service(self, uuid): return True
+        def delete_service(self, uuid): return True
+
+    monkeypatch.setattr(api, "get_client", lambda: FakeClient())
+    monkeypatch.setattr(api, "get_keys_client", lambda: None)
+
+    # Agent échu depuis 2 jours (grâce 0) → doit être suspendu
+    aid = _running_agent("late@example.com", "test-late",
+                         hosting_plan="monthly")
+    db = SessionFactory()
+    db.get(Tenant, aid).hosting_paid_until = datetime.now(timezone.utc) - timedelta(days=2)
+    db.commit(); db.close()
+
+    db = SessionFactory()
+    changed = api.enforce_hosting(db)
+    db.close()
+    assert changed >= 1
+    assert "svc-test-late" in stops
+
+    db = SessionFactory()
+    agent = db.get(Tenant, aid)
+    assert agent.suspended_at is not None
+    # Force le retard au-delà de la rétention → suppression au prochain balayage
+    agent.suspended_at = datetime.now(timezone.utc) - timedelta(days=40)
+    db.commit(); db.close()
+
+    db = SessionFactory()
+    api.enforce_hosting(db)
+    gone = db.get(Tenant, aid)
+    db.close()
+    assert gone is None
+
+
+def test_admin_restore_suspended_agent(monkeypatch):
+    from datetime import datetime, timezone
+    from app import api
+    from app.db import SessionFactory
+    from app.models import Tenant
+
+    monkeypatch.setattr(api, "get_client", lambda: None)
+    admin = _admin("restore-admin@example.com")
+    aid = _running_agent("client@example.com", "test-restore", hosting_plan="monthly")
+    db = SessionFactory()
+    db.get(Tenant, aid).suspended_at = datetime.now(timezone.utc)
+    db.commit(); db.close()
+
+    resp = client.post(f"/api/admin/agents/{aid}/restore", headers=admin)
+    assert resp.status_code == 200
+    assert resp.json()["hosting"]["state"] == "active"
+    db = SessionFactory()
+    assert db.get(Tenant, aid).suspended_at is None
+    db.close()
+
+
+def test_stripe_link_redirect_with_reference():
+    admin = _admin("stripe-admin@example.com")
+    # Configure un lien de recharge pour 10 €
+    resp = client.put("/api/admin/stripe", json={
+        "topup": {"10": "https://buy.stripe.com/test_10"},
+    }, headers=admin)
+    assert resp.status_code == 200
+
+    headers = _register("stripe-user@example.com")
+    aid = client.post("/api/agents", json={"name": "S", "subdomain": "test-stripe"},
+                      headers=headers).json()["agent"]["id"]
+    data = client.post(f"/api/agents/{aid}/topup", json={"amount_eur": 10}, headers=headers).json()
+    # Redirigé vers Stripe, avec client_reference_id = id du checkout
+    assert data["checkout_url"].startswith("https://buy.stripe.com/test_10")
+    assert "client_reference_id=" in data["checkout_url"]
+
+
+def test_stripe_webhook_credits_topup(monkeypatch):
+    from app import api
+    from app.db import SessionFactory
+    from app.models import Checkout
+
+    from app.models import Tenant
+
+    monkeypatch.setattr(api, "get_keys_client", lambda: None)
+    aid = _running_agent("wh@example.com", "test-wh")
+    db = SessionFactory()
+    co = Checkout(user_id=db.get(Tenant, aid).user_id, tenant_id=aid, kind="topup",
+                  amount_eur=11.0, credit_eur=10.0, status="pending")
+    db.add(co); db.commit(); cid = co.id; db.close()
+
+    event = {"type": "checkout.session.completed",
+             "data": {"object": {"client_reference_id": cid}}}
+    resp = client.post("/api/stripe/webhook", json=event)
+    assert resp.status_code == 200 and resp.json()["received"] is True
+
+    db = SessionFactory()
+    assert db.get(Checkout, cid).status == "paid"
+    assert db.get(Tenant, aid).balance_eur == 10.0
+    db.close()
+
+    # Rejeu idempotent : pas de double crédit
+    client.post("/api/stripe/webhook", json=event)
+    db = SessionFactory()
+    assert db.get(Tenant, aid).balance_eur == 10.0
+    db.close()
+
+
+def test_stripe_webhook_bad_signature_rejected(monkeypatch):
+    from app.config import get_settings
+    get_settings().stripe_webhook_secret = "whsec_test"
+    try:
+        resp = client.post("/api/stripe/webhook",
+                           json={"type": "checkout.session.completed", "data": {"object": {}}},
+                           headers={"stripe-signature": "t=1,v1=deadbeef"})
+        assert resp.status_code == 400
+    finally:
+        get_settings().stripe_webhook_secret = ""

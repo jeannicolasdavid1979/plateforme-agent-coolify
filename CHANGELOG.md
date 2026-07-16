@@ -3,6 +3,31 @@
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/).
 Les dates suivent l'ordre de développement.
 
+## [Non publié] — Abonnement d'hébergement (revenu récurrent) & Stripe
+
+### Ajouté
+- **Abonnement d'hébergement par agent** : mensuel (19 €) ou annuel (190 €),
+  premier mois inclus au déploiement. Chrono **FOMO** sur la carte de l'agent
+  (jours → heures → minutes, rouge sous 7 j) avec boutons *Renouveler* /
+  *Passer à l'année*.
+- **Cycle de vie automatique** : à l'échéance (+ grâce configurable) l'agent est
+  **suspendu** (stop Coolify) ; données **restaurables 30 j** (paiement client
+  ou bouton admin *Restaurer*) ; au-delà, **suppression définitive**. Balayage
+  horaire en tâche de fond + `POST /api/admin/enforce-hosting`. Nouveau
+  `stop_service` côté client Coolify.
+- **Paiements Stripe par Payment Links** : liens configurables en admin
+  (déploiement, hébergement mensuel/annuel, un par montant de recharge). Le
+  client est redirigé avec `client_reference_id` ; le webhook
+  `POST /api/stripe/webhook` crédite automatiquement (`checkout.session.completed`)
+  et prolonge les abonnements auto (`invoice.paid`), signature vérifiée via
+  `STRIPE_WEBHOOK_SECRET`. **Repli** sur la page de paiement simulée sans lien.
+- **Réglages admin étendus** : prix d'hébergement mensuel/annuel, jours de grâce
+  et de rétention ; section « Liens de paiement Stripe ».
+- **CGV** : nouvelle clause d'hébergement/abonnement (art. 4) — montants et délais
+  réels, suspension, rétention, restauration, résiliation.
+- Cycle exposé par l'API (`hosting` dans le détail d'un agent) et inclus dans
+  l'export RGPD.
+
 ## [Non publié] — Frais de service, admin robuste & persistance
 
 ### Corrigé (démarrage)

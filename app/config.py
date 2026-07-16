@@ -44,6 +44,18 @@ class Settings(BaseSettings):
     # plateforme). 0.10 = +10 % : le client reçoit 10 € de crédit IA et règle
     # 11 €. Modifiable par l'admin ; borné à 0–100 %.
     service_fee_rate: float = 0.10
+
+    # ── Hébergement récurrent (revenu mensuel) ────────────────────────
+    # Chaque agent déployé est hébergé contre un abonnement mensuel. Le client
+    # peut payer au mois (renouvellement manuel, chrono FOMO) ou à l'année.
+    hosting_price_eur: float = 19.0          # par mois
+    hosting_annual_price_eur: float = 190.0  # à l'année (≈ 2 mois offerts)
+    hosting_grace_days: int = 0              # jours de tolérance après l'échéance avant suspension
+    hosting_retention_days: int = 30         # jours de rétention (restaurable) avant suppression définitive
+
+    # Stripe — les liens de paiement sont saisis dans l'admin (table settings).
+    # Le secret de webhook, lui, est un secret d'infra : variable d'environnement.
+    stripe_webhook_secret: str = ""
     # Montants de recharge proposés au client (liste, en euros). Chaque euro
     # rechargé relève d'autant le plafond de la clé OpenRouter dédiée.
     topup_amounts_eur: str = "5,10,20,50,100"

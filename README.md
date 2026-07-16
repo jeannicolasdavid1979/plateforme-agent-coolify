@@ -154,6 +154,7 @@ Configurées dans Coolify → Application → Environment :
 | `OPENROUTER_PROVISIONING_KEY` | Clé maître de provisioning (crée les clés par agent) | `sk-or-v1-...` |
 | `EUR_USD_RATE` | Conversion crédit € → plafond $ OpenRouter | `1.0` |
 | `SERVICE_FEE_RATE` | Frais de service sur les recharges (`0.10` = +10 %) | `0.10` |
+| `STRIPE_WEBHOOK_SECRET` | Secret de signature du webhook Stripe (vérifie les événements) | `whsec_...` |
 | `DATABASE_URL` | Emplacement de la base (défaut : volume persistant) | `sqlite:////app/data/orchestrator.db` |
 | `JWT_SECRET` | Secret pour les JWT | `HermesPlatformSecret2026!Kechlab` |
 | `ADMIN_EMAILS` | Emails admin (séparés par virgules) | `david.jn@orange.fr` |
@@ -187,6 +188,42 @@ défaut**) qui finance l'exploitation de la plateforme. Le principe est
 voit le total à payer frais inclus (ex. 11 €), et reçoit exactement le crédit
 choisi sur son agent (le plafond de sa clé OpenRouter est relevé de 10 €). Le
 taux est modifiable dans **« Réglages business »** (0 à 100 %).
+
+### Abonnement d'hébergement (revenu récurrent) & chrono FOMO
+
+Chaque agent déployé est hébergé contre un **abonnement mensuel** (19 € par
+défaut) ou **annuel** (190 €). Le **premier mois est inclus** dans le
+déploiement. Sur la carte de l'agent, un **compte à rebours** affiche le temps
+restant avant l'échéance (jours → heures → minutes, passage en rouge sous 7
+jours) avec les boutons **Renouveler** / **Passer à l'année**.
+
+Cycle de vie (paramétrable dans *Réglages business*) :
+
+1. **Échéance dépassée** (+ grâce éventuelle) → l'agent est **suspendu**
+   (conteneurs arrêtés via Coolify, accès coupé).
+2. Les données restent **restaurables pendant 30 jours** (`hosting_retention_days`) :
+   le client régularise en payant, ou l'admin clique **Restaurer** sur la carte.
+3. Passé ce délai → **suppression définitive** (agent, clé OpenRouter, données).
+
+Le balayage tourne **automatiquement chaque heure** (tâche de fond) ; l'admin
+peut aussi le déclencher via `POST /api/admin/enforce-hosting`. Tout est
+**explicité dans les CGV** (`/legal/cgv`), avec les montants et délais réels.
+
+### Paiements Stripe (Payment Links + webhook)
+
+L'admin colle ses **Stripe Payment Links** dans *Réglages business → Liens de
+paiement Stripe* (déploiement, hébergement mensuel/annuel, et un lien par
+montant de recharge). Au paiement, le client est redirigé vers le lien Stripe
+avec un `client_reference_id` (l'id du paiement local) ; Stripe le renvoie dans
+l'événement **`checkout.session.completed`** reçu sur `POST /api/stripe/webhook`,
+ce qui **crédite automatiquement** le bon compte — sans rapprochement manuel.
+Les abonnements auto-débités sont prolongés via `invoice.paid`.
+
+- Configurez le webhook dans Stripe vers `https://VOTRE-DOMAINE/api/stripe/webhook`
+  et renseignez `STRIPE_WEBHOOK_SECRET` pour **vérifier la signature** des
+  événements (fortement recommandé en production).
+- **Sans lien configuré**, la plateforme retombe sur la **page de paiement
+  simulée** — tout reste fonctionnel pour tester avant de brancher Stripe.
 
 ### Persistance des données (profils, agents, crédits)
 
@@ -231,6 +268,8 @@ colonnes** (jamais de perte).
 | `GET` | `/api/agents/{id}` | Détails d'un agent (URL, mot de passe) |
 | `GET` | `/api/agents/{id}/jobs` | Jobs de provisioning |
 | `POST` | `/api/agents/{id}/topup` | Recharger le crédit (montant au choix : 5/10/20/50/100 €) |
+| `POST` | `/api/agents/{id}/hosting` | Souscrire/renouveler l'hébergement (mensuel ou annuel) |
+| `POST` | `/api/stripe/webhook` | Webhook Stripe (crédite après paiement) |
 | `POST` | `/api/agents/{id}/restart` | Redémarrer les conteneurs |
 | `DELETE` | `/api/agents/{id}` | Supprimer un agent |
 | `GET` | `/api/pricing` | Prix et montants de recharge proposés |
@@ -238,8 +277,11 @@ colonnes** (jamais de perte).
 | `DELETE` | `/api/account` | Supprimer son compte (RGPD) |
 | `GET` | `/legal/*` | Pages légales (mentions, confidentialité, CGV, cookies) |
 | `GET` | `/api/admin/agents` | Lister tous les agents (admin) |
-| `PUT` | `/api/admin/pricing` | Modifier prix et montants de recharge (admin) |
+| `PUT` | `/api/admin/pricing` | Modifier prix, frais, hébergement, montants (admin) |
+| `GET`·`PUT` | `/api/admin/stripe` | Consulter/enregistrer les liens de paiement Stripe (admin) |
 | `POST` | `/api/admin/agents/{id}/redeploy` | Redéployer un agent (admin) |
+| `POST` | `/api/admin/agents/{id}/restore` | Restaurer un agent suspendu (admin) |
+| `POST` | `/api/admin/enforce-hosting` | Déclencher le balayage du cycle de vie (admin) |
 
 ## Flow de déploiement d'un agent
 

@@ -68,6 +68,10 @@ def init_db():
         "ALTER TABLE tenants ADD COLUMN openrouter_key_hash VARCHAR(128)",
         "ALTER TABLE users ADD COLUMN consent_at DATETIME",
         "ALTER TABLE users ADD COLUMN consent_version VARCHAR(32)",
+        "ALTER TABLE tenants ADD COLUMN hosting_plan VARCHAR(16) NOT NULL DEFAULT 'none'",
+        "ALTER TABLE tenants ADD COLUMN hosting_paid_until DATETIME",
+        "ALTER TABLE tenants ADD COLUMN suspended_at DATETIME",
+        "ALTER TABLE tenants ADD COLUMN stripe_subscription_id VARCHAR(64)",
     ]
     with engine.connect() as conn:
         for stmt in _MIGRATIONS:

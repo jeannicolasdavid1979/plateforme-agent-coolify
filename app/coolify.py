@@ -186,6 +186,15 @@ class CoolifyClient:
             logger.warning("restart refusé : %s", exc)
             return False
 
+    def stop_service(self, svc_uuid: str) -> bool:
+        """Arrête les conteneurs sans supprimer le service (suspension d'hébergement)."""
+        try:
+            self._post(f"/api/v1/services/{svc_uuid}/stop")
+            return True
+        except RuntimeError as exc:
+            logger.warning("stop refusé : %s", exc)
+            return False
+
     def wait_running(self, svc_uuid: str, timeout: int = 180) -> str:
         """Poll le statut Coolify jusqu'à 'running' (ou expiration).
 

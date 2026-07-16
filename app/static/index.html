@@ -176,6 +176,16 @@
   button.chip .chip-total { font-size:11px; font-weight:500; color:var(--muted); }
   button.chip:hover .chip-total { color:var(--accent); }
 
+  /* Hébergement récurrent + chrono FOMO */
+  .hosting { margin-top:14px; padding:12px 14px; border:1px solid var(--line);
+             border-radius:14px; background:var(--surface); }
+  .hosting.urgent { border-color:#e0a63a; box-shadow:0 0 0 1px rgba(224,166,58,.25); }
+  .hosting.suspended-box { border-color:#e05a5a; background:rgba(224,90,90,.06); }
+  .fomo-countdown { font-variant-numeric:tabular-nums; font-weight:700; color:var(--text); }
+  .fomo-countdown.hot { color:#e0663a; animation:fomopulse 1.4s ease-in-out infinite; }
+  @keyframes fomopulse { 0%,100% { opacity:1; } 50% { opacity:.5; } }
+  @media (prefers-reduced-motion: reduce) { .fomo-countdown.hot { animation:none; } }
+
   /* Pied de page légal */
   .site-footer { max-width:1120px; margin:80px auto 0; padding:28px 32px 48px;
                  border-top:1px solid var(--line); display:flex; flex-wrap:wrap;
@@ -295,6 +305,23 @@
         <div class="muted" style="margin-top:6px;font-size:12px">Ajouté au montant payé par le client ; le crédit IA reçu reste le montant choisi.</div>
       </div>
       <div class="card">
+        <div class="muted">Hébergement — mensuel (€)</div>
+        <input id="p-hosting" type="number" min="0" step="1">
+      </div>
+      <div class="card">
+        <div class="muted">Hébergement — annuel (€)</div>
+        <input id="p-hosting-annual" type="number" min="0" step="1">
+      </div>
+      <div class="card">
+        <div class="muted">Grâce après échéance (jours)</div>
+        <input id="p-grace" type="number" min="0" step="1">
+      </div>
+      <div class="card">
+        <div class="muted">Rétention avant suppression (jours)</div>
+        <input id="p-retention" type="number" min="0" step="1">
+        <div class="muted" style="margin-top:6px;font-size:12px">Fenêtre pendant laquelle un compte suspendu reste restaurable par l'admin.</div>
+      </div>
+      <div class="card">
         <div class="muted">Montants de recharge proposés (séparés par des virgules)</div>
         <input id="p-amounts" type="text" placeholder="5,10,20,50,100">
       </div>
@@ -302,6 +329,34 @@
     <div class="row" style="margin-top:16px">
       <button class="ghost" onclick="savePricing()">Enregistrer les réglages</button>
       <span id="pricing-msg" class="muted"></span>
+    </div>
+
+    <h2 style="margin-top:40px">Liens de paiement Stripe</h2>
+    <p class="muted" style="max-width:640px">Collez ici vos <b>Payment Links</b> Stripe. Au paiement,
+      le client y est redirigé et son compte est crédité automatiquement via le webhook
+      <code id="wh-url">/api/stripe/webhook</code> (identifie le paiement par <code>client_reference_id</code>).
+      Sans lien, la page de paiement simulée reste utilisée. <span id="wh-state"></span></p>
+    <div class="grid" style="margin-top:16px">
+      <div class="card">
+        <div class="muted">Lien — déploiement</div>
+        <input id="s-deploy" type="url" placeholder="https://buy.stripe.com/...">
+      </div>
+      <div class="card">
+        <div class="muted">Lien — hébergement mensuel</div>
+        <input id="s-host-monthly" type="url" placeholder="https://buy.stripe.com/...">
+      </div>
+      <div class="card">
+        <div class="muted">Lien — hébergement annuel</div>
+        <input id="s-host-annual" type="url" placeholder="https://buy.stripe.com/...">
+      </div>
+      <div class="card">
+        <div class="muted">Liens — recharges (un par ligne : <code>montant=lien</code>)</div>
+        <textarea id="s-topup" rows="4" placeholder="10=https://buy.stripe.com/...&#10;20=https://buy.stripe.com/..."></textarea>
+      </div>
+    </div>
+    <div class="row" style="margin-top:16px">
+      <button class="ghost" onclick="saveStripe()">Enregistrer les liens Stripe</button>
+      <span id="stripe-msg" class="muted"></span>
     </div>
   </section>
 
@@ -369,7 +424,9 @@ const STEP_LABELS = {
   done: 'Agent en ligne',
 };
 const STATUS_LABELS = { awaiting_payment: 'à payer', pending: 'en attente', deploying: 'déploiement', running: 'en ligne', failed: 'échec' };
-let pricing = { deploy_price_eur: 0, topup_amount_eur: 0, initial_credit_eur: 0, service_fee_rate: 0, topup_amounts_eur: [] };
+let pricing = { deploy_price_eur: 0, topup_amount_eur: 0, initial_credit_eur: 0, service_fee_rate: 0,
+                hosting_price_eur: 19, hosting_annual_price_eur: 190, hosting_grace_days: 0,
+                hosting_retention_days: 30, topup_amounts_eur: [] };
 const eur = (n) => Number(n || 0).toFixed(2).replace('.', ',');
 
 function errorMessage(detail, fallback) {
@@ -439,9 +496,47 @@ async function loadPricing() {
     $('p-credit').value = pricing.initial_credit_eur;
     // Taux stocké en fraction (0.10) côté serveur, saisi en % côté admin
     if ($('p-fee')) $('p-fee').value = Math.round((pricing.service_fee_rate || 0) * 100);
+    if ($('p-hosting')) $('p-hosting').value = pricing.hosting_price_eur;
+    if ($('p-hosting-annual')) $('p-hosting-annual').value = pricing.hosting_annual_price_eur;
+    if ($('p-grace')) $('p-grace').value = Math.round(pricing.hosting_grace_days || 0);
+    if ($('p-retention')) $('p-retention').value = Math.round(pricing.hosting_retention_days || 30);
     // Nombres bruts (point décimal) : les virgules servent de séparateurs
     if ($('p-amounts')) $('p-amounts').value = (pricing.topup_amounts_eur || []).join(', ');
   } catch (e) { /* valeurs par défaut serveur */ }
+}
+
+async function loadStripe() {
+  if (!isAdmin || !$('s-deploy')) return;
+  try {
+    const d = await api('/api/admin/stripe');
+    const L = d.links || {};
+    $('s-deploy').value = L.deploy || '';
+    $('s-host-monthly').value = L.hosting_monthly || '';
+    $('s-host-annual').value = L.hosting_annual || '';
+    $('s-topup').value = Object.entries(L.topup || {}).map(([k, v]) => `${k}=${v}`).join('\n');
+    $('wh-state').textContent = d.webhook_configured
+      ? '✔ Secret de webhook configuré.'
+      : '⚠ Secret de webhook absent (STRIPE_WEBHOOK_SECRET) — signatures non vérifiées.';
+  } catch (e) { /* non-admin ou indisponible */ }
+}
+
+async function saveStripe() {
+  $('stripe-msg').textContent = '';
+  const topup = {};
+  ($('s-topup').value || '').split('\n').forEach(line => {
+    const i = line.indexOf('=');
+    if (i > 0) { const k = line.slice(0, i).trim(); const v = line.slice(i + 1).trim(); if (k && v) topup[k] = v; }
+  });
+  try {
+    await api('/api/admin/stripe', {method: 'PUT', body: JSON.stringify({
+      deploy: $('s-deploy').value.trim(),
+      hosting_monthly: $('s-host-monthly').value.trim(),
+      hosting_annual: $('s-host-annual').value.trim(),
+      topup,
+    })});
+    $('stripe-msg').textContent = '✔ Liens Stripe enregistrés';
+    loadStripe();
+  } catch (e) { $('stripe-msg').textContent = e.message; }
 }
 
 async function savePricing() {
@@ -452,6 +547,10 @@ async function savePricing() {
       topup_amount_eur: parseFloat($('p-topup').value),
       initial_credit_eur: parseFloat($('p-credit').value),
       service_fee_rate: (parseFloat($('p-fee').value) || 0) / 100,
+      hosting_price_eur: parseFloat($('p-hosting').value),
+      hosting_annual_price_eur: parseFloat($('p-hosting-annual').value),
+      hosting_grace_days: parseInt($('p-grace').value) || 0,
+      hosting_retention_days: parseInt($('p-retention').value) || 0,
       topup_amounts_eur: $('p-amounts').value.replace(/\s|€/g, ''),
     })});
     $('pricing-msg').textContent = '✔ Réglages enregistrés';
@@ -525,6 +624,63 @@ async function copyText(text, btn) {
   setTimeout(() => { btn.textContent = old; }, 1200);
 }
 
+// ── Hébergement / chrono FOMO ───────────────────────────────────────
+function fmtCountdown(ms) {
+  if (ms <= 0) return 'échéance dépassée';
+  const s = Math.floor(ms / 1000);
+  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600),
+        m = Math.floor((s % 3600) / 60), sec = s % 60;
+  if (d > 0) return `${d} j ${h} h ${m} min`;   // loin : jours → heures → minutes
+  if (h > 0) return `${h} h ${m} min ${sec} s`;  // < 1 jour : on montre les secondes (urgence)
+  return `${m} min ${sec} s`;
+}
+
+function hostingHtml(a) {
+  const h = a.hosting || {};
+  if (h.state === 'none') return '';
+  const monthly = eur(pricing.hosting_price_eur), annual = eur(pricing.hosting_annual_price_eur);
+  const renew = `
+    <div class="row" style="margin-top:10px;gap:8px;flex-wrap:wrap">
+      <button class="chip" onclick="subscribe('${a.id}','monthly')">Renouveler — ${monthly} €/mois</button>
+      <button class="chip" onclick="subscribe('${a.id}','annual')">Passer à l'année — ${annual} €</button>
+    </div>`;
+  if (h.suspended || h.state === 'suspended' || h.state === 'deletable') {
+    const until = h.delete_at ? Date.parse(h.delete_at) : 0;
+    return `
+      <div class="hosting suspended-box fade-up">
+        <strong>⛔️ Agent suspendu — hébergement impayé</strong>
+        <div class="muted" style="margin-top:6px">Réglez pour réactiver immédiatement. Sans régularisation,
+          suppression <b>définitive</b> dans <span class="fomo-countdown hot" data-until="${until}">…</span>.</div>
+        ${renew}
+        ${isAdmin ? `<div class="row" style="margin-top:8px"><button class="ghost mini" onclick="adminRestore('${a.id}')">Restaurer (admin)</button></div>` : ''}
+      </div>`;
+  }
+  const until = h.paid_until ? Date.parse(h.paid_until) : 0;
+  const urgent = (h.seconds_left != null && h.seconds_left < 7 * 86400);
+  return `
+    <div class="hosting fade-up${urgent ? ' urgent' : ''}">
+      <span class="muted">Hébergement ${h.plan === 'annual' ? 'annuel' : 'mensuel'} —
+        ${urgent ? '⏳ ' : ''}renouvellement dans
+        <span class="fomo-countdown${urgent ? ' hot' : ''}" data-until="${until}">…</span></span>
+      ${renew}
+    </div>`;
+}
+
+// Met à jour tous les chronos chaque seconde, indépendamment des re-rendus.
+setInterval(() => {
+  document.querySelectorAll('.fomo-countdown').forEach(el => {
+    const until = parseInt(el.dataset.until || '0', 10);
+    el.textContent = until ? fmtCountdown(until - Date.now()) : '—';
+  });
+}, 1000);
+
+async function subscribe(id, plan) {
+  try {
+    const data = await api(`/api/agents/${id}/hosting`, {method: 'POST', body: JSON.stringify({plan})});
+    location.href = data.checkout_url;
+  } catch (e) { alert(e.message); }
+}
+
 function renderTenantCard(a, job, fz) {
   const esc = a.name.replace(/'/g, "\\'");
   const del = `<button class="danger" onclick="destroy('${a.id}','${esc}')">Supprimer</button>`;
@@ -545,6 +701,7 @@ function renderTenantCard(a, job, fz) {
   } else if (a.status === 'running') {
     const pwd = a.password || '';
     body = `
+      ${hostingHtml(a)}
       <div class="access fade-up">
         <div class="row"><span class="muted">Adresse</span>
           <code>${a.url ? a.url.replace(/^https?:\/\//, '') : '—'}</code>
@@ -707,6 +864,13 @@ async function adminRedeploy(id) {
   } catch (e) { alert(e.message); }
 }
 
+async function adminRestore(id) {
+  try {
+    await api(`/api/admin/agents/${id}/restore`, {method:'POST'});
+    loadTenants();
+  } catch (e) { alert(e.message); }
+}
+
 async function exportData() {
   const msg = $('account-msg'); msg.textContent = 'Préparation de l’export…';
   try {
@@ -756,7 +920,7 @@ function refresh() {
       isAdmin = me.is_admin;
       $('who').textContent = email + (isAdmin ? ' · admin' : '');
       $('settings').classList.toggle('hidden', !isAdmin);
-      if (isAdmin) renderCachedTenants();
+      if (isAdmin) { renderCachedTenants(); loadStripe(); }
     }).catch(() => {});
     loadPricing().then(loadTenants);
   }
