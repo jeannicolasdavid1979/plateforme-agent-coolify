@@ -34,6 +34,8 @@ def init_db():
         "ALTER TABLE tenants ADD COLUMN balance_eur FLOAT NOT NULL DEFAULT 0",
         "ALTER TABLE tenants ADD COLUMN openrouter_api_key VARCHAR(255)",
         "ALTER TABLE tenants ADD COLUMN openrouter_key_hash VARCHAR(128)",
+        "ALTER TABLE users ADD COLUMN consent_at DATETIME",
+        "ALTER TABLE users ADD COLUMN consent_version VARCHAR(32)",
     ]
     with engine.connect() as conn:
         for stmt in _MIGRATIONS:

@@ -29,6 +29,11 @@ class User(Base):
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(default=_now)
 
+    # RGPD — preuve du consentement aux CGV/politique de confidentialité,
+    # recueilli à l'inscription (base légale : exécution du contrat + consentement).
+    consent_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    consent_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
     tenants: Mapped[list["Tenant"]] = relationship(back_populates="owner")
 
 

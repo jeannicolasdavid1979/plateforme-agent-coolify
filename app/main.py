@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .api import router
 from .db import init_db
+from .legal import router as legal_router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
 
@@ -50,3 +51,4 @@ def index():
 
 
 app.include_router(router)
+app.include_router(legal_router)

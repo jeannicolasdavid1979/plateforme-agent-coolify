@@ -25,6 +25,7 @@ router = APIRouter()
 class RegisterRequest(BaseModel):
     email: str
     password: str
+    accept_terms: bool = False  # acceptation CGV + politique de confidentialité
 
 
 class LoginRequest(BaseModel):
@@ -67,6 +68,17 @@ def pricing(db: Session = Depends(get_db)):
     return get_pricing(db)
 
 
+def _now_iso() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat()
+
+
+@router.get("/api/legal/terms-version")
+def terms_version():
+    """Version des CGV/confidentialité en vigueur — affichée à l'inscription."""
+    return {"terms_version": get_settings().terms_version}
+
+
 @router.put("/api/admin/pricing")
 def update_pricing(
     body: PricingUpdate,
@@ -94,9 +106,24 @@ def update_pricing(
 @router.post("/api/auth/register")
 def register(body: RegisterRequest, db: Session = Depends(get_db)):
     email = body.email.lower()
+    # Consentement obligatoire (RGPD) : on ne crée pas de compte sans
+    # acceptation explicite des CGV et de la politique de confidentialité,
+    # et on horodate cette acceptation comme preuve.
+    if not body.accept_terms:
+        raise HTTPException(
+            400, "Vous devez accepter les CGV et la politique de confidentialité"
+        )
+    if len(body.password) < 8:
+        raise HTTPException(400, "Le mot de passe doit faire au moins 8 caractères")
     if db.scalar(select(User).where(User.email == email)):
         raise HTTPException(409, "Cet email est déjà enregistré")
-    user = User(email=email, password_hash=hash_password(body.password))
+    from datetime import datetime, timezone
+    user = User(
+        email=email,
+        password_hash=hash_password(body.password),
+        consent_at=datetime.now(timezone.utc),
+        consent_version=get_settings().terms_version,
+    )
     db.add(user)
     db.commit()
     return {"token": create_token(user), "email": user.email}
@@ -384,15 +411,10 @@ def restart_agent(agent_id: str, user: User = Depends(current_user), db: Session
     return {"status": "restarting"}
 
 
-@router.delete("/api/agents/{agent_id}")
-def delete_agent(agent_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    """Détruit l'agent : service Coolify (conteneurs, volumes), clé API, puis DB."""
-    agent = db.get(Tenant, agent_id)
-    if not agent or agent.user_id != user.id:
-        raise HTTPException(404, "Agent non trouvé")
-
-    # La clé OpenRouter dédiée part avec l'agent (le crédit restant est perdu,
-    # c'est annoncé dans la confirmation de suppression)
+def _purge_tenant(db: Session, agent: Tenant) -> None:
+    """Détruit un agent partout : clé OpenRouter dédiée, service Coolify
+    (conteneurs + volumes), puis toutes ses lignes en base. Réutilisé par la
+    suppression d'un agent et par l'effacement complet du compte (RGPD)."""
     if agent.openrouter_key_hash:
         keys = get_keys_client()
         if keys:
@@ -408,11 +430,86 @@ def delete_agent(agent_id: str, user: User = Depends(current_user), db: Session 
                 agent.name, agent.coolify_service_uuid,
             )
 
-    db.execute(sa_delete(ProvisioningJob).where(ProvisioningJob.tenant_id == agent_id))
-    db.execute(sa_delete(Checkout).where(Checkout.tenant_id == agent_id))
+    db.execute(sa_delete(ProvisioningJob).where(ProvisioningJob.tenant_id == agent.id))
+    db.execute(sa_delete(Checkout).where(Checkout.tenant_id == agent.id))
     db.delete(agent)
+
+
+@router.delete("/api/agents/{agent_id}")
+def delete_agent(agent_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """Détruit l'agent : service Coolify (conteneurs, volumes), clé API, puis DB."""
+    agent = db.get(Tenant, agent_id)
+    if not agent or agent.user_id != user.id:
+        raise HTTPException(404, "Agent non trouvé")
+
+    # La clé OpenRouter dédiée part avec l'agent (le crédit restant est perdu,
+    # c'est annoncé dans la confirmation de suppression)
+    _purge_tenant(db, agent)
     db.commit()
     return {"status": "deleted"}
+
+
+# ── RGPD : accès/portabilité (Art. 15/20) et effacement (Art. 17) ────
+
+
+@router.get("/api/account/export")
+def export_account(user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """Exporte toutes les données personnelles de l'utilisateur (portabilité).
+
+    Le mot de passe haché (un secret d'authentification, pas une donnée à
+    porter) est exclu. Tout le reste — compte, consentement, agents, paiements
+    — est fourni dans un format structuré et lisible."""
+    agents = db.scalars(select(Tenant).where(Tenant.user_id == user.id)).all()
+    agent_ids = [a.id for a in agents]
+    checkouts = (
+        db.scalars(select(Checkout).where(Checkout.tenant_id.in_(agent_ids))).all()
+        if agent_ids else []
+    )
+    return {
+        "exported_at": _now_iso(),
+        "account": {
+            "id": user.id,
+            "email": user.email,
+            "created_at": user.created_at.isoformat() if user.created_at else None,
+            "is_admin": user.is_admin,
+            "consent": {
+                "accepted_at": user.consent_at.isoformat() if user.consent_at else None,
+                "version": user.consent_version,
+            },
+        },
+        "agents": [
+            {
+                "id": a.id, "name": a.name, "subdomain": a.subdomain,
+                "model": a.model, "system_prompt": a.system_prompt,
+                "status": a.status, "balance_eur": a.balance_eur or 0.0,
+                "url": a.instance_url,
+                "created_at": a.created_at.isoformat() if a.created_at else None,
+            }
+            for a in agents
+        ],
+        "payments": [
+            {
+                "id": c.id, "tenant_id": c.tenant_id, "kind": c.kind,
+                "amount_eur": c.amount_eur, "credit_eur": c.credit_eur,
+                "status": c.status,
+                "created_at": c.created_at.isoformat() if c.created_at else None,
+            }
+            for c in checkouts
+        ],
+    }
+
+
+@router.delete("/api/account")
+def delete_account(user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """Efface définitivement le compte et TOUTES ses données (droit à
+    l'effacement) : chaque agent est détruit partout (Coolify + OpenRouter),
+    puis le compte lui-même. Action irréversible."""
+    agents = db.scalars(select(Tenant).where(Tenant.user_id == user.id)).all()
+    for agent in agents:
+        _purge_tenant(db, agent)
+    db.delete(user)
+    db.commit()
+    return {"status": "account_deleted", "agents_removed": len(agents)}
 
 
 # ── Admin ────────────────────────────────────────────────────────────

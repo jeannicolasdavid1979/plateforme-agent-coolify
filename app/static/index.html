@@ -158,6 +158,31 @@
                          filter:blur(6px); }
   @media (max-width:860px){ .hero{grid-template-columns:1fr} .agent-visual{max-width:300px; justify-self:center} }
   @media (prefers-reduced-motion:reduce){ .agent-visual{animation:none} }
+
+  /* Bouton d'action douce mais destructrice (supprimer le compte) */
+  button.ghost.danger { color:var(--bad); border-color:rgba(224,92,92,.4); }
+  button.ghost.danger:hover { background:rgba(224,92,92,.12); }
+
+  /* Pied de page légal */
+  .site-footer { max-width:1120px; margin:80px auto 0; padding:28px 32px 48px;
+                 border-top:1px solid var(--line); display:flex; flex-wrap:wrap;
+                 gap:16px; align-items:center; justify-content:space-between; }
+  .foot-links { display:flex; flex-wrap:wrap; gap:20px; }
+  .foot-links a { color:var(--muted); font-size:14px; text-decoration:none; }
+  .foot-links a:hover { color:var(--text); }
+  .foot-copy { font-size:13px; }
+
+  /* Bandeau cookies (information, traceurs strictement nécessaires) */
+  .cookie-note { position:fixed; left:16px; right:16px; bottom:16px; z-index:50;
+                 max-width:720px; margin:0 auto; padding:14px 18px;
+                 background:rgba(20,22,28,0.96); border:1px solid var(--line);
+                 border-radius:12px; box-shadow:0 20px 60px rgba(0,0,0,.5);
+                 backdrop-filter:blur(14px); display:flex; gap:16px;
+                 align-items:center; justify-content:space-between; font-size:13px;
+                 color:var(--muted); }
+  .cookie-note a { color:var(--accent); }
+  .cookie-note button { padding:8px 16px; font-size:13px; white-space:nowrap; }
+  @media (max-width:560px){ .cookie-note{flex-direction:column; align-items:stretch} }
 </style>
 </head>
 <body>
@@ -194,7 +219,13 @@
     <h2>Connexion</h2>
     <input id="email" type="email" placeholder="email@exemple.com" autocomplete="email">
     <input id="password" type="password" placeholder="mot de passe (8+ caractères)" autocomplete="current-password">
-    <div class="row" style="margin-top:8px">
+    <label class="consent" style="display:flex;gap:9px;align-items:flex-start;margin-top:12px;font-size:13px;color:var(--muted);cursor:pointer">
+      <input id="accept-terms" type="checkbox" style="margin-top:3px;width:auto;flex:0 0 auto">
+      <span>Je crée un compte et j'accepte les
+        <a href="/legal/cgv" target="_blank">CGV / CGU</a> et la
+        <a href="/legal/confidentialite" target="_blank">politique de confidentialité</a>.</span>
+    </label>
+    <div class="row" style="margin-top:12px">
       <button onclick="login()">Se connecter</button>
       <button class="ghost" onclick="register()">Créer un compte</button>
     </div>
@@ -259,7 +290,39 @@
     <div id="tenants" class="grid" style="margin-top:24px"></div>
   </section>
 
+  <!-- Section : Mon compte (droits RGPD) -->
+  <section id="account" class="hidden">
+    <div class="eyebrow">Mon compte</div>
+    <h2>Vos données vous appartiennent</h2>
+    <p class="muted" style="margin-top:8px;max-width:640px">Conformément au RGPD,
+    vous pouvez récupérer l'ensemble de vos données ou supprimer définitivement
+    votre compte à tout moment.</p>
+    <div class="row" style="margin-top:16px;gap:12px;flex-wrap:wrap">
+      <button class="ghost" onclick="exportData()">Exporter mes données (JSON)</button>
+      <button class="ghost danger" onclick="deleteAccount()">Supprimer mon compte</button>
+    </div>
+    <p id="account-msg" class="muted"></p>
+  </section>
+
 </main>
+
+<!-- Pied de page légal (obligatoire : mentions, confidentialité, CGV, cookies) -->
+<footer class="site-footer">
+  <div class="foot-links">
+    <a href="/legal/mentions">Mentions légales</a>
+    <a href="/legal/confidentialite">Confidentialité</a>
+    <a href="/legal/cgv">CGV / CGU</a>
+    <a href="/legal/cookies">Cookies</a>
+  </div>
+  <div class="foot-copy muted"></div>
+</footer>
+
+<!-- Bandeau cookies (traceurs strictement nécessaires — information, pas consentement) -->
+<div id="cookie-note" class="cookie-note hidden">
+  <span>Ce site utilise uniquement des traceurs strictement nécessaires à son
+  fonctionnement (session). <a href="/legal/cookies">En savoir plus</a>.</span>
+  <button class="ghost" onclick="dismissCookies()">J'ai compris</button>
+</div>
 
 <script>
 const $ = (id) => document.getElementById(id);
@@ -308,12 +371,21 @@ const api = async (path, options = {}) => {
   return res.json();
 };
 
-async function register() { await authCall('/api/auth/register'); }
+async function register() {
+  // Le consentement RGPD est obligatoire à la création du compte : on
+  // l'exige côté client aussi, pour un message clair avant l'appel serveur.
+  if (!$('accept-terms').checked) {
+    $('msg').textContent = "Cochez la case pour accepter les CGV et la politique de confidentialité.";
+    return;
+  }
+  await authCall('/api/auth/register', {accept_terms: true});
+}
 async function login() { await authCall('/api/auth/login'); }
-async function authCall(path) {
+async function authCall(path, extra = {}) {
   $('msg').textContent = '';
   try {
-    const data = await api(path, {method:'POST', body: JSON.stringify({email: $('email').value, password: $('password').value})});
+    const body = Object.assign({email: $('email').value, password: $('password').value}, extra);
+    const data = await api(path, {method:'POST', body: JSON.stringify(body)});
     token = data.token; email = data.email;
     localStorage.setItem('hermes_jwt', token);
     localStorage.setItem('hermes_email', email);
@@ -593,12 +665,47 @@ async function adminRedeploy(id) {
   } catch (e) { alert(e.message); }
 }
 
+async function exportData() {
+  const msg = $('account-msg'); msg.textContent = 'Préparation de l’export…';
+  try {
+    const data = await api('/api/account/export');
+    const blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'mes-donnees-hermes.json';
+    a.click();
+    URL.revokeObjectURL(a.href);
+    msg.textContent = '✔ Export téléchargé.';
+  } catch (e) { msg.textContent = e.message; }
+}
+
+async function deleteAccount() {
+  // Double confirmation : l'effacement est irréversible (compte + agents + crédits)
+  if (!confirm("Supprimer DÉFINITIVEMENT votre compte, tous vos agents et vos crédits ?\nCette action est irréversible.")) return;
+  if (prompt('Pour confirmer, tapez SUPPRIMER en majuscules :') !== 'SUPPRIMER') return;
+  try {
+    await api('/api/account', {method: 'DELETE'});
+    alert('Votre compte et vos données ont été supprimés.');
+    logout();
+  } catch (e) { $('account-msg').textContent = e.message; }
+}
+
+function dismissCookies() {
+  localStorage.setItem('hermes_cookie_ack', '1');
+  $('cookie-note').classList.add('hidden');
+}
+function initCookieNote() {
+  if (localStorage.getItem('hermes_cookie_ack') !== '1')
+    $('cookie-note').classList.remove('hidden');
+}
+
 function refresh() {
   const logged = Boolean(token);
   $('auth').classList.toggle('hidden', logged);
   $('hero').classList.toggle('hidden', logged);
   $('shop').classList.toggle('hidden', !logged);
   $('fleet').classList.toggle('hidden', !logged);
+  $('account').classList.toggle('hidden', !logged);
   $('settings').classList.add('hidden');
   $('logout').classList.toggle('hidden', !logged);
   $('who').textContent = email;
@@ -612,6 +719,16 @@ function refresh() {
     loadPricing().then(loadTenants);
   }
 }
+
+// Pied de page : nom du site + année, depuis les infos publiques du serveur
+(async () => {
+  try {
+    const cfg = await api('/api/legal/config');
+    document.querySelector('.foot-copy').textContent =
+      `© ${cfg.year} ${cfg.site_name} · conditions v.${cfg.terms_version}`;
+  } catch (e) { /* pied de page non critique */ }
+})();
+initCookieNote();
 refresh();
 </script>
 </body>

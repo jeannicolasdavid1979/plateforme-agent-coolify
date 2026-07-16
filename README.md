@@ -318,8 +318,25 @@ séparés (agent + webui) avec un volume partagé. L'agent tourne dans son propr
 conteneur `nousresearch/hermes-agent`.
 
 **Q: Le health check échoue ?**
-R: C'est normal les 2 premières minutes. Coolify doit démarrer les conteneurs
-et Traefik doit obtenir le certificat SSL. Le health check a un timeout de 120s.
+R: C'est normal les premières minutes. Coolify doit démarrer les conteneurs
+et Traefik doit obtenir le certificat SSL. Le health check attend jusqu'à 300s,
+puis considère le déploiement réussi si Coolify confirme les conteneurs `running`
+(l'URL publique peut converger encore un peu — SSL/routage).
+
+**Q: Le sous-domaine du client n'est pas appliqué (l'agent reste en `*.sslip.io`) ?**
+R: Résolu. Le parseur de compose de Coolify **ignore** la valeur écrite dans une
+variable `SERVICE_FQDN_*` et régénère son propre domaine `sslip.io`. Le domaine
+d'un service compose se pose via le **champ officiel `urls`** de l'API :
+`{"urls": [{"name": "<service du compose>", "url": "https://…"}], "force_domain_override": true}`,
+accepté au `POST /services` (création) **et** au `PATCH /services/{uuid}`. C'est
+lui qui écrit `service_applications.fqdn`, d'où Coolify génère les labels Traefik
+au déploiement. Voir `app/coolify.py` (`set_service_urls`) et `app/provisioning.py`
+(`_step_set_fqdn`, `find_web_services`).
+
+Deux prérequis côté infra :
+- un enregistrement DNS **wildcard** `*.<base_domain>` → IP du VPS ;
+- une version de Coolify supportant le champ `urls` (4.0.x+). Si le PATCH est
+  refusé, le journal de déploiement l'indique explicitement.
 
 **Q: Comment changer le modèle d'un agent existant ?**
 R: Dans la WebUI de l'agent (Paramètres → Modèle), ou via docker exec :
@@ -338,6 +355,65 @@ R: Via Coolify (Service → Delete) ou via l'API Coolify :
 curl -X DELETE https://coolify.kechlab.com/api/v1/services/<uuid> \
   -H "Authorization: Bearer $COOLIFY_API_TOKEN"
 ```
+
+## Conformité RGPD & mentions légales
+
+La plateforme est prête pour une exploitation commerciale en France/UE. Avant la
+mise en production, **renseignez les coordonnées légales** dans les variables
+d'environnement (voir `app/config.py`, section « Mentions légales & RGPD ») :
+
+| Variable | Rôle |
+|----------|------|
+| `LEGAL_PUBLISHER`, `LEGAL_STATUS`, `LEGAL_SIRET`, `LEGAL_ADDRESS`, `LEGAL_DIRECTOR` | Identité de l'éditeur (mentions légales — LCEN art. 6 III) |
+| `LEGAL_CONTACT_EMAIL`, `DPO_EMAIL` | Contact général et contact RGPD |
+| `HOST_NAME`, `HOST_ADDRESS`, `HOST_CONTACT` | Hébergeur (par défaut : Hetzner) |
+| `TERMS_VERSION` | Version des CGV/confidentialité ; à incrémenter pour re-solliciter le consentement |
+
+Tant qu'ils ne sont pas renseignés, les pages légales affichent des marqueurs
+`[À RENSEIGNER …]` bien visibles.
+
+### Pages légales (servies par l'app)
+
+| URL | Contenu |
+|-----|---------|
+| `/legal/mentions` | Mentions légales (éditeur + hébergeur) |
+| `/legal/confidentialite` | Politique de confidentialité RGPD (traitements, bases légales, durées, droits, CNIL) |
+| `/legal/cgv` | Conditions générales de vente et d'utilisation |
+| `/legal/cookies` | Politique cookies (traceurs strictement nécessaires) |
+
+Toutes sont liées depuis le pied de page du dashboard.
+
+### Droits des personnes (implémentés)
+
+- **Consentement** — case obligatoire à l'inscription ; l'acceptation est
+  **horodatée et versionnée** (`users.consent_at` / `consent_version`) comme preuve.
+- **Accès & portabilité** (art. 15/20) — `GET /api/account/export` renvoie toutes
+  les données de l'utilisateur en JSON (bouton « Exporter mes données »). Le hash
+  du mot de passe en est exclu.
+- **Effacement** (art. 17) — `DELETE /api/account` détruit le compte, ses agents
+  (services Coolify + clés OpenRouter dédiées) et toutes les données associées,
+  avec double confirmation côté interface.
+- **Cookies** — uniquement des traceurs strictement nécessaires (session en
+  `localStorage`), exemptés de consentement (art. 82 LIL) ; un bandeau informatif
+  est affiché.
+
+### Registre des traitements
+
+Un registre des activités de traitement (art. 30 RGPD) est fourni dans
+[`docs/RGPD.md`](docs/RGPD.md).
+
+### Reste à faire avant production
+
+- [ ] Renseigner les coordonnées légales (voir tableau ci-dessus).
+- [ ] Brancher **Stripe** en remplacement de la page `/pay/{id}` simulée (le
+      cycle de vie `Checkout` est déjà en place ; voir `app/api.py`).
+- [ ] Signer un accord de sous-traitance (DPA) avec les prestataires (hébergeur,
+      OpenRouter, Stripe).
+- [ ] Fixer un `JWT_SECRET` robuste et une `EUR_USD_RATE` réaliste.
+
+## Historique
+
+Le détail des évolutions est consigné dans [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Licence
 

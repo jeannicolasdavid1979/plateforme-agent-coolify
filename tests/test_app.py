@@ -27,7 +27,7 @@ def test_health():
 
 def test_register_and_login():
     # Register
-    resp = client.post("/api/auth/register", json={"email": "test@example.com", "password": "secret123"})
+    resp = client.post("/api/auth/register", json={"email": "test@example.com", "password": "secret123", "accept_terms": True})
     assert resp.status_code == 200
     token = resp.json()["token"]
     assert token
@@ -44,8 +44,8 @@ def test_register_and_login():
 
 
 def test_duplicate_register():
-    client.post("/api/auth/register", json={"email": "dup@example.com", "password": "secret123"})
-    resp = client.post("/api/auth/register", json={"email": "dup@example.com", "password": "secret123"})
+    client.post("/api/auth/register", json={"email": "dup@example.com", "password": "secret123", "accept_terms": True})
+    resp = client.post("/api/auth/register", json={"email": "dup@example.com", "password": "secret123", "accept_terms": True})
     assert resp.status_code == 409
 
 
@@ -61,7 +61,7 @@ def test_create_agent_requires_auth():
 
 def test_list_agents():
     # Register and get token
-    resp = client.post("/api/auth/register", json={"email": "user@example.com", "password": "secret123"})
+    resp = client.post("/api/auth/register", json={"email": "user@example.com", "password": "secret123", "accept_terms": True})
     token = resp.json()["token"]
     headers = {"Authorization": f"Bearer {token}"}
 
@@ -72,7 +72,10 @@ def test_list_agents():
 
 
 def _register(email="buyer@example.com"):
-    resp = client.post("/api/auth/register", json={"email": email, "password": "secret123"})
+    resp = client.post(
+        "/api/auth/register",
+        json={"email": email, "password": "secret123", "accept_terms": True},
+    )
     return {"Authorization": f"Bearer {resp.json()['token']}"}
 
 
@@ -142,7 +145,7 @@ def test_pricing_defaults_and_admin_update():
     # L'admin (email dans admin_emails, promu au login) peut
     from app.config import get_settings
     get_settings().admin_emails = "boss@example.com"
-    client.post("/api/auth/register", json={"email": "boss@example.com", "password": "secret123"})
+    client.post("/api/auth/register", json={"email": "boss@example.com", "password": "secret123", "accept_terms": True})
     resp = client.post("/api/auth/login", json={"email": "boss@example.com", "password": "secret123"})
     admin_headers = {"Authorization": f"Bearer {resp.json()['token']}"}
 
@@ -506,3 +509,119 @@ def test_topup_handles_openrouter_failure_gracefully(monkeypatch, caplog):
     assert any("Recharge OpenRouter échouée" in record.message for record in caplog.records)
 
     db.close()
+
+
+# ── RGPD & pages légales ─────────────────────────────────────────────
+
+
+def test_register_requires_consent():
+    """Sans acceptation des CGV, l'inscription est refusée (RGPD)."""
+    resp = client.post("/api/auth/register", json={"email": "noconsent@example.com", "password": "secret123"})
+    assert resp.status_code == 400
+    assert "confidentialité" in resp.json()["detail"]
+
+    # Un mot de passe trop court est aussi refusé
+    resp = client.post("/api/auth/register", json={"email": "short@example.com", "password": "123", "accept_terms": True})
+    assert resp.status_code == 400
+
+
+def test_register_records_consent():
+    """L'acceptation est horodatée et versionnée comme preuve."""
+    from app.db import SessionFactory
+    from app.models import User
+    from sqlalchemy import select
+    from app.config import get_settings
+
+    resp = client.post("/api/auth/register", json={"email": "consented@example.com", "password": "secret123", "accept_terms": True})
+    assert resp.status_code == 200
+
+    db = SessionFactory()
+    user = db.scalar(select(User).where(User.email == "consented@example.com"))
+    assert user.consent_at is not None
+    assert user.consent_version == get_settings().terms_version
+    db.close()
+
+
+def test_terms_version_endpoint():
+    from app.config import get_settings
+    resp = client.get("/api/legal/terms-version")
+    assert resp.status_code == 200
+    assert resp.json()["terms_version"] == get_settings().terms_version
+
+
+def test_export_account_data():
+    """L'export contient le compte, le consentement, les agents et paiements,
+    mais jamais le mot de passe haché (secret, non portable)."""
+    headers = _register("exporter@example.com")
+    client.post("/api/agents", json={"name": "Exp", "subdomain": "test-exp"}, headers=headers)
+
+    resp = client.get("/api/account/export", headers=headers)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["account"]["email"] == "exporter@example.com"
+    assert data["account"]["consent"]["version"] is not None
+    assert len(data["agents"]) == 1
+    assert data["agents"][0]["subdomain"] == "test-exp"
+    # Aucune fuite du hash du mot de passe, où qu'il soit
+    assert "password_hash" not in str(data)
+    assert "scrypt" not in str(data)
+
+    # L'export exige une authentification
+    assert client.get("/api/account/export").status_code == 401
+
+
+def test_delete_account_purges_everything(monkeypatch):
+    """L'effacement du compte détruit les agents (Coolify+OpenRouter) et le compte."""
+    from app import api
+    from app.models import Tenant, User
+    from app.db import SessionFactory
+    from sqlalchemy import select
+
+    deleted_keys, deleted_services = [], []
+
+    class FakeKeys:
+        def delete(self, h): deleted_keys.append(h); return True
+
+    class FakeClient:
+        def delete_service(self, u): deleted_services.append(u); return True
+
+    monkeypatch.setattr(api, "get_keys_client", lambda: FakeKeys())
+    monkeypatch.setattr(api, "get_client", lambda: FakeClient())
+
+    headers = _register("eraseme@example.com")
+    resp = client.post("/api/agents", json={"name": "Gone", "subdomain": "test-gone"}, headers=headers)
+    agent_id = resp.json()["agent"]["id"]
+
+    # Simuler un agent réellement déployé (service + clé)
+    db = SessionFactory()
+    tenant = db.get(Tenant, agent_id)
+    tenant.coolify_service_uuid = "svc-xyz"
+    tenant.openrouter_key_hash = "hash-xyz"
+    db.commit(); db.close()
+
+    resp = client.delete("/api/account", headers=headers)
+    assert resp.status_code == 200
+    assert resp.json()["agents_removed"] == 1
+    assert deleted_keys == ["hash-xyz"]
+    assert deleted_services == ["svc-xyz"]
+
+    # Le compte et ses agents ont disparu
+    db = SessionFactory()
+    assert db.scalar(select(User).where(User.email == "eraseme@example.com")) is None
+    assert db.get(Tenant, agent_id) is None
+    db.close()
+
+    # Le jeton ne fonctionne plus
+    assert client.get("/api/account/export", headers=headers).status_code == 401
+
+
+def test_legal_pages_render():
+    for path in ("/legal/mentions", "/legal/confidentialite", "/legal/cgv", "/legal/cookies"):
+        resp = client.get(path)
+        assert resp.status_code == 200, path
+        assert "text/html" in resp.headers["content-type"]
+    # La politique de confidentialité cite les droits RGPD et la CNIL
+    body = client.get("/legal/confidentialite").text
+    assert "portabilité" in body and "CNIL" in body
+    # Les mentions légales exposent l'hébergeur
+    assert "Hetzner" in client.get("/legal/mentions").text

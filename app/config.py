@@ -41,6 +41,31 @@ class Settings(BaseSettings):
     topup_amount_eur: float = 10.0
     initial_credit_eur: float = 5.0
 
+    # ── Mentions légales & RGPD ───────────────────────────────────────
+    # À RENSEIGNER avant la mise en production (via variables d'environnement
+    # ou .env). Les mentions légales et la politique de confidentialité sont
+    # obligatoires en France/UE ; les valeurs ci-dessous sont des marqueurs
+    # explicites pour ne pas publier un site sans les avoir remplies.
+    site_name: str = "Plateforme Agent Hermes"
+    site_url: str = "https://plateformeagentcoolify.kechlab.com"
+    legal_publisher: str = "[À RENSEIGNER — nom de l'éditeur]"
+    legal_status: str = "[À RENSEIGNER — forme juridique, ex. SASU / auto-entrepreneur]"
+    legal_siret: str = "[À RENSEIGNER — SIRET / RCS]"
+    legal_capital: str = ""  # capital social, si société
+    legal_address: str = "[À RENSEIGNER — adresse postale]"
+    legal_director: str = "[À RENSEIGNER — directeur de la publication]"
+    legal_contact_email: str = "contact@kechlab.com"
+    legal_vat: str = ""  # numéro de TVA intracommunautaire, si assujetti
+    # Délégué / contact RGPD (peut être l'éditeur lui-même s'il n'y a pas de DPO)
+    dpo_email: str = "privacy@kechlab.com"
+    # Hébergeur (obligatoire dans les mentions légales) — infra Coolify/Hetzner
+    host_name: str = "Hetzner Online GmbH"
+    host_address: str = "Industriestr. 25, 91710 Gunzenhausen, Allemagne"
+    host_contact: str = "https://www.hetzner.com — +49 (0)9831 505-0"
+    # Version des CGV/confidentialité acceptée à l'inscription (à incrémenter
+    # à chaque évolution substantielle pour re-solliciter le consentement)
+    terms_version: str = "2026-07-16"
+
 
 @lru_cache
 def get_settings() -> Settings:
