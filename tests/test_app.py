@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.db import init_db, engine
-from app.models import Base
+from app.models import Base, Checkout
 
 
 @pytest.fixture(autouse=True)
@@ -329,3 +329,68 @@ def test_delete_agent():
     assert resp.status_code == 200
     resp = client.get("/api/agents", headers=headers)
     assert resp.json()["agents"] == []
+
+
+def test_topup_increases_openrouter_key_cap(monkeypatch):
+    """La recharge crédit relève le plafond de la clé OpenRouter dédiée."""
+    from app import api
+    from app.db import SessionFactory
+    from app.models import Tenant, User
+
+    add_credit_calls = []
+
+    class FakeKeys:
+        def create(self, name, limit_usd):
+            return "sk-or-v1-tenant-key", "hash123"
+
+        def info(self, key_hash):
+            return {"limit": 5.0, "usage": 0.5}
+
+        def add_credit(self, key_hash, amount_usd):
+            add_credit_calls.append({"key_hash": key_hash, "amount_usd": amount_usd})
+            return round(5.0 + amount_usd, 2)
+
+    monkeypatch.setattr(api, "get_keys_client", lambda: FakeKeys())
+
+    # Créer un agent avec crédit initial et clé dédiée
+    db = SessionFactory()
+    user = User(email="topup-key@y.z", password_hash="h")
+    db.add(user); db.commit()
+    tenant = Tenant(
+        user_id=user.id, name="TopupKey", subdomain="test-topup-key",
+        status="running", balance_eur=5.0,
+        openrouter_key_hash="hash123"
+    )
+    db.add(tenant); db.commit()
+
+    # Première recharge : 10 EUR = 10 USD (eur_usd_rate=1.0 par défaut)
+    checkout1 = Checkout(
+        user_id=user.id, tenant_id=tenant.id, kind="topup",
+        amount_eur=10.0, credit_eur=10.0, status="pending"
+    )
+    db.add(checkout1); db.commit()
+
+    resp = client.post(f"/api/pay/{checkout1.id}")
+    assert resp.status_code == 200
+    assert len(add_credit_calls) == 1
+    assert add_credit_calls[0] == {"key_hash": "hash123", "amount_usd": 10.0}
+    # Refresh tenant from DB (API call uses separate session)
+    db.refresh(tenant)
+    assert tenant.balance_eur == 15.0
+
+    # Deuxième recharge : 5 EUR = 5 USD
+    add_credit_calls.clear()
+    checkout2 = Checkout(
+        user_id=user.id, tenant_id=tenant.id, kind="topup",
+        amount_eur=5.0, credit_eur=5.0, status="pending"
+    )
+    db.add(checkout2); db.commit()
+
+    resp = client.post(f"/api/pay/{checkout2.id}")
+    assert resp.status_code == 200
+    assert len(add_credit_calls) == 1
+    assert add_credit_calls[0] == {"key_hash": "hash123", "amount_usd": 5.0}
+    db.refresh(tenant)
+    assert tenant.balance_eur == 20.0
+
+    db.close()
