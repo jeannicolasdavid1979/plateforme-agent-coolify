@@ -278,13 +278,13 @@ def test_template_probe_cached_and_compose_creation(monkeypatch):
     calls = {"probes": 0, "compose_creates": []}
 
     class FakeClient:
-        def create_service(self, name):
+        def create_service(self, name, urls=None):
             calls["probes"] += 1
             return "probe000000000ab"
         def get_compose_raw(self, u): return TEMPLATE
         def delete_service(self, u): return True
-        def create_service_from_compose(self, name, compose_yaml):
-            calls["compose_creates"].append((name, compose_yaml))
+        def create_service_from_compose(self, name, compose_yaml, urls=None):
+            calls["compose_creates"].append((name, compose_yaml, urls))
             return "real000000000abc"
         def get_password(self, u): return "pwd"
 
@@ -299,9 +299,12 @@ def test_template_probe_cached_and_compose_creation(monkeypatch):
     detail = engine._step_deploy_service(tenant, None)
 
     assert "compose personnalisé" in detail
-    name, compose = calls["compose_creates"][0]
+    name, compose, urls = calls["compose_creates"][0]
     assert name == "hermes-test-tpl"
     assert "SERVICE_FQDN_HERMESWEBUI_8787=https://test-tpl.kechlab.com" in compose
+    # Le domaine passe par le champ officiel `urls` de l'API, ciblé sur le
+    # service webui du compose — c'est lui que Coolify lit vraiment.
+    assert urls == [{"name": "hermes-webui", "url": "https://test-tpl.kechlab.com"}]
     assert tenant.coolify_service_uuid == "real000000000abc"
     # La sonde a tourné une fois et le template est en cache
     assert calls["probes"] == 1
@@ -313,6 +316,58 @@ def test_template_probe_cached_and_compose_creation(monkeypatch):
     engine._step_deploy_service(t2, None)
     assert calls["probes"] == 1
     db.close()
+
+
+def test_set_fqdn_uses_official_urls_field(monkeypatch):
+    """L'étape set_fqdn attribue le domaine via PATCH `urls` (mécanisme
+    officiel de l'API Coolify), même quand le compose contient déjà le
+    domaine — le parseur ignore la valeur des variables SERVICE_FQDN_*."""
+    from app import provisioning as prov
+    from app.db import SessionFactory
+    from app.models import Tenant, User
+
+    COMPOSE = (
+        "services:\n"
+        "  hermes-webui:\n"
+        "    image: ghcr.io/nesquena/hermes-webui\n"
+        "    environment:\n"
+        "      - SERVICE_FQDN_HERMESWEBUI_8787=https://marocompta.kechlab.com\n"
+    )
+    patched_urls = {}
+
+    class FakeClient:
+        def get_compose_raw(self, u): return COMPOSE
+        def set_service_urls(self, svc_uuid, urls):
+            patched_urls.update(uuid=svc_uuid, urls=urls)
+            return ["marocompta.kechlab.com"]
+        def update_compose_raw(self, u, y):
+            raise AssertionError("compose déjà à jour : pas de re-patch attendu")
+
+    monkeypatch.setattr(prov, "get_client", lambda: FakeClient())
+
+    db = SessionFactory()
+    user = User(email="fqdn@y.z", password_hash="h")
+    db.add(user); db.commit()
+    tenant = Tenant(
+        user_id=user.id, name="M", subdomain="marocompta", status="deploying",
+        coolify_service_uuid="svc00000000000ab",
+        instance_url="https://marocompta.kechlab.com",
+    )
+    db.add(tenant); db.commit()
+
+    detail = prov.ProvisioningEngine(db)._step_set_fqdn(tenant, None)
+    assert patched_urls["uuid"] == "svc00000000000ab"
+    assert patched_urls["urls"] == [
+        {"name": "hermes-webui", "url": "https://marocompta.kechlab.com"}
+    ]
+    assert "marocompta.kechlab.com" in detail
+    db.close()
+
+    # find_web_services : seuls les services HTTP (variables magiques/webui)
+    from app.provisioning import find_web_services
+    assert find_web_services(COMPOSE) == ["hermes-webui"]
+    assert find_web_services("services:\n  db:\n    image: postgres\n") == []
+    assert find_web_services(None) == []
 
 
 def test_subdomain_uppercase_is_normalized():

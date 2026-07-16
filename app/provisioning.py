@@ -46,6 +46,30 @@ _AGENT_BOOTSTRAP = (
 _FQDN_KEY_RE = re.compile(r"^SERVICE_(?:FQDN|URL)_HERMESWEBUI(?:_\d+)?$")
 
 
+def find_web_services(compose_yaml: str | None) -> list[str]:
+    """Noms (clés du compose) des services exposés en HTTP : ceux qui portent
+    une variable magique SERVICE_FQDN/URL_* ou une image/un nom webui. C'est
+    à EUX que l'API Coolify attribue un domaine (champ `urls`)."""
+    if not compose_yaml:
+        return []
+    try:
+        doc = yaml.safe_load(compose_yaml)
+        services = doc["services"]
+        assert isinstance(services, dict)
+    except Exception:
+        return []
+    found: list[str] = []
+    for name, svc in services.items():
+        if not isinstance(svc, dict):
+            continue
+        env = svc.get("environment") or []
+        entries = env if isinstance(env, list) else [f"{k}={v}" for k, v in env.items()]
+        keys = [str(e).split("=", 1)[0].strip() for e in entries]
+        if any(_FQDN_KEY_RE.match(k) for k in keys) or "webui" in str(svc.get("image", "")) or "webui" in str(name):
+            found.append(str(name))
+    return found
+
+
 def customize_compose(compose_yaml: str, fqdn_url: str) -> tuple[str | None, list[str]]:
     """Adapte le compose du template au tenant.
 
@@ -219,20 +243,27 @@ class ProvisioningEngine:
         fqdn_url = f"https://{tenant.subdomain}.{self.settings.base_domain}"
         svc_name = f"hermes-{tenant.subdomain}"
 
-        # Voie royale : créer le service avec notre compose, domaine du client
-        # déjà inscrit — le premier parse de Coolify l'enregistre tel quel.
+        # Le domaine du client se transmet par le champ officiel `urls` de
+        # l'API ({nom du service compose} → URL) : c'est lui qui remplit
+        # service_applications.fqdn, la source des labels Traefik. Une valeur
+        # posée dans SERVICE_FQDN_* du YAML est ignorée par le parseur.
         svc_uuid, how = None, ""
         template = self._get_template_compose(client)
+        web_svcs = find_web_services(template) or ["hermes-webui"]
+        urls = [{"name": s, "url": fqdn_url} for s in web_svcs]
+
+        # Voie royale : créer le service avec notre compose (entrypoint
+        # config.yaml, variables magiques) ET le domaine, dès la création.
         if template:
             patched, _changes = customize_compose(template, fqdn_url)
             if patched:
-                svc_uuid = client.create_service_from_compose(svc_name, patched)
-                how = " (compose personnalisé, domaine intégré)"
+                svc_uuid = client.create_service_from_compose(svc_name, patched, urls=urls)
+                how = " (compose personnalisé + domaine transmis à la création)"
 
-        # Repli : création depuis le template, domaine tenté ensuite
+        # Repli : création depuis le template, domaine transmis quand même
         if not svc_uuid:
-            svc_uuid = client.create_service(svc_name)
-            how = " (template Coolify, domaine appliqué ensuite)"
+            svc_uuid = client.create_service(svc_name, urls=urls)
+            how = " (template Coolify, domaine transmis à la création)"
 
         tenant.coolify_service_uuid = svc_uuid
         tenant.instance_url = fqdn_url
@@ -279,27 +310,34 @@ class ProvisioningEngine:
     def _step_set_fqdn(self, tenant: Tenant, job: ProvisioningJob) -> str:
         client = get_client()
         svc_uuid = tenant.coolify_service_uuid
-
-        # La source de vérité des labels Traefik est le compose du service :
-        # on y inscrit le domaine (et l'entrypoint config.yaml de l'agent),
-        # le déploiement qui suit re-parse le tout.
         details: list[str] = []
+
+        # Mécanisme OFFICIEL (spec OpenAPI Coolify) : PATCH du champ `urls`
+        # — écrit service_applications.fqdn, d'où sont générés les labels
+        # Traefik au déploiement. Toujours exécuté, même si le domaine figure
+        # déjà dans le compose : la valeur d'une variable SERVICE_FQDN_* du
+        # YAML est ignorée par le parseur (constaté en réel : sslip.io gardé).
         compose = client.get_compose_raw(svc_uuid)
-        if compose and f"={tenant.instance_url}" in compose:
-            # Service créé avec notre compose : le domaine y est déjà.
-            return "domaine intégré au compose dès la création"
-        if compose:
+        web_svcs = find_web_services(compose) or ["hermes-webui"]
+        domains = client.set_service_urls(
+            svc_uuid, [{"name": s, "url": tenant.instance_url} for s in web_svcs]
+        )
+        if domains is None:
+            details.append(
+                "PATCH urls refusé — Coolify trop ancien pour ce champ ? "
+                "(mettre l'instance à jour)"
+            )
+        elif domains:
+            details.append("domaines retenus par Coolify : " + ", ".join(domains))
+        else:
+            details.append(f"domaine {tenant.instance_url} attribué via l'API")
+
+        # Ceinture : le compose porte aussi le domaine (variables magiques)
+        # et l'entrypoint config.yaml de l'agent.
+        if compose and f"={tenant.instance_url}" not in compose:
             patched, changes = customize_compose(compose, tenant.instance_url)
             if patched and client.update_compose_raw(svc_uuid, patched):
                 details.append("compose adapté : " + " ; ".join(changes))
-            else:
-                details.append("compose non modifié (" + " ; ".join(changes) + ")")
-        else:
-            details.append("compose introuvable via l'API")
-
-        # Ceinture + bretelles : le PATCH fqdn direct, s'il est supporté
-        if client.patch_service_fqdn(svc_uuid, "hermes-webui", tenant.instance_url):
-            details.append("PATCH fqdn accepté")
         return " — ".join(details)
 
     def _step_start_service(self, tenant: Tenant, job: ProvisioningJob) -> str:

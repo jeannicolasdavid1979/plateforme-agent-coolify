@@ -75,40 +75,72 @@ class CoolifyClient:
 
     # ── Create / configure / start (une méthode par étape du journal) ─
 
-    def create_service(self, name: str) -> str:
+    def create_service(self, name: str, urls: list[dict] | None = None) -> str:
         """Create a Coolify Service from the hermes-agent-with-webui template."""
-        created = self._post("/api/v1/services", {
+        payload = {
             "project_uuid": self.project_uuid,
             "environment_name": self.environment_name,
             "server_uuid": self.server_uuid,
             "destination_uuid": self.destination_uuid,
             "type": SERVICE_TYPE,
             "name": name,
-        })
+        }
+        if urls:
+            payload["urls"] = urls
+            payload["force_domain_override"] = True
+        created = self._post("/api/v1/services", payload)
         svc_uuid = created["uuid"]
-        logger.info("Service %s created (uuid=%s)", name, svc_uuid)
+        logger.info("Service %s created (uuid=%s, domains=%s)", name, svc_uuid, created.get("domains"))
         return svc_uuid
 
-    def create_service_from_compose(self, name: str, compose_yaml: str) -> str | None:
-        """Crée le service avec NOTRE compose — le domaine du client y est déjà
-        inscrit, donc le PREMIER parse de Coolify l'enregistre directement.
-        (Modifier le domaine après coup est refusé par l'API : le fqdn se fige
-        au premier parse.) Retourne None si l'API refuse ce mode de création."""
+    def create_service_from_compose(
+        self, name: str, compose_yaml: str, urls: list[dict] | None = None
+    ) -> str | None:
+        """Crée le service avec NOTRE compose ET le domaine du client via le
+        champ officiel `urls` : [{'name': '<service du compose>', 'url': 'https://…'}].
+        C'est lui qui écrit service_applications.fqdn — la source des labels
+        Traefik. Retourne None si l'API refuse ce mode de création."""
         import base64
+        payload = {
+            "project_uuid": self.project_uuid,
+            "environment_name": self.environment_name,
+            "server_uuid": self.server_uuid,
+            "destination_uuid": self.destination_uuid,
+            "name": name,
+            "docker_compose_raw": base64.b64encode(compose_yaml.encode("utf-8")).decode("ascii"),
+        }
+        if urls:
+            payload["urls"] = urls
+            payload["force_domain_override"] = True
         try:
-            created = self._post("/api/v1/services", {
-                "project_uuid": self.project_uuid,
-                "environment_name": self.environment_name,
-                "server_uuid": self.server_uuid,
-                "destination_uuid": self.destination_uuid,
-                "name": name,
-                "docker_compose_raw": base64.b64encode(compose_yaml.encode("utf-8")).decode("ascii"),
-            })
+            created = self._post("/api/v1/services", payload)
             uuid = created.get("uuid")
-            logger.info("Service %s créé depuis compose personnalisé (uuid=%s)", name, uuid)
+            logger.info(
+                "Service %s créé depuis compose personnalisé (uuid=%s, domains=%s)",
+                name, uuid, created.get("domains"),
+            )
             return uuid
         except RuntimeError as exc:
             logger.warning("Création par compose refusée : %s", exc)
+            return None
+
+    def set_service_urls(self, svc_uuid: str, urls: list[dict]) -> list[str] | None:
+        """Attribue les domaines aux conteneurs du service (PATCH `urls`).
+
+        C'est LE mécanisme documenté par l'API Coolify pour poser un domaine
+        sur un service compose — la valeur d'une variable SERVICE_FQDN_* dans
+        le YAML est ignorée par le parseur (il ne lit que le chemin après '/').
+        Retourne la liste des domaines retenus par Coolify, ou None si refus
+        (version trop ancienne : le champ existe depuis Coolify 4.0.x)."""
+        try:
+            data = self._patch(f"/api/v1/services/{svc_uuid}", {
+                "urls": urls,
+                "force_domain_override": True,
+            })
+            domains = data.get("domains") if isinstance(data, dict) else None
+            return domains if isinstance(domains, list) else []
+        except RuntimeError as exc:
+            logger.warning("set_service_urls refusé : %s", exc)
             return None
 
     def get_service(self, svc_uuid: str) -> dict:
@@ -122,17 +154,6 @@ class CoolifyClient:
             return [a.get("fqdn") or "" for a in apps if a.get("fqdn")]
         except Exception:
             return []
-
-    def patch_service_fqdn(self, svc_uuid: str, service_name: str, fqdn: str) -> bool:
-        try:
-            self._patch(f"/api/v1/services/{svc_uuid}", {
-                "service_name": service_name,
-                "fqdn": fqdn,
-            })
-            return True
-        except RuntimeError as exc:
-            logger.warning("FQDN patch refusé : %s", exc)
-            return False
 
     def trigger_deploy(self, svc_uuid: str) -> bool:
         """Force un déploiement complet — contrairement à /start, Coolify
