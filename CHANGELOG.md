@@ -3,13 +3,29 @@
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/).
 Les dates suivent l'ordre de développement.
 
-## [Non publié] — Abonnement d'hébergement (revenu récurrent) & Stripe
+## [Non publié] — Admin en cartes produit & offres d'hébergement clarifiées
+
+### Ajouté / modifié
+- **Deux formules d'hébergement distinctes** (au lieu d'un mensuel/annuel flou) :
+  *sans engagement* **29 €/mois** (prolongation manuelle, chrono FOMO explicite
+  « vous perdez l'agent en fin de mois »), et *abonnement* **19 €/mois** engagé
+  12 mois (prélèvement Stripe auto, message serein) ou **209 €/an** payé en une
+  fois (1 mois offert). Le déploiement démarre en « sans engagement » pour
+  pousser vers l'abonnement. Plans portés par le `Checkout` (`plan`) et le
+  `Tenant` (`manual` / `sub_monthly` / `sub_annual`).
+- **Interface admin refondue** en **cartes « produit »** : chaque offre réunit
+  son **montant et son lien Stripe** au même endroit (déploiement, sans
+  engagement, abonnement mensuel, annuel) ; les **recharges** sont des lignes
+  *montant + lien* ajoutables ; un **seul bouton** enregistre prix et liens.
+- Liens Stripe hébergement séparés : `hosting_manual`, `hosting_sub` (abonnement
+  récurrent), `hosting_annual`. Webhook `invoice.paid` conserve le plan
+  `sub_monthly`.
+
+## [Non publié] — Abonnement d'hébergement (revenu récurrent) & Stripe (initial)
 
 ### Ajouté
-- **Abonnement d'hébergement par agent** : mensuel (19 €) ou annuel (190 €),
-  premier mois inclus au déploiement. Chrono **FOMO** sur la carte de l'agent
-  (jours → heures → minutes, rouge sous 7 j) avec boutons *Renouveler* /
-  *Passer à l'année*.
+- **Abonnement d'hébergement par agent**, chrono **FOMO** sur la carte de
+  l'agent (jours → heures → minutes, rouge sous 7 j).
 - **Cycle de vie automatique** : à l'échéance (+ grâce configurable) l'agent est
   **suspendu** (stop Coolify) ; données **restaurables 30 j** (paiement client
   ou bouton admin *Restaurer*) ; au-delà, **suppression définitive**. Balayage

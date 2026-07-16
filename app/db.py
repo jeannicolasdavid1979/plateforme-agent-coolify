@@ -72,6 +72,7 @@ def init_db():
         "ALTER TABLE tenants ADD COLUMN hosting_paid_until DATETIME",
         "ALTER TABLE tenants ADD COLUMN suspended_at DATETIME",
         "ALTER TABLE tenants ADD COLUMN stripe_subscription_id VARCHAR(64)",
+        "ALTER TABLE checkouts ADD COLUMN plan VARCHAR(16)",
     ]
     with engine.connect() as conn:
         for stmt in _MIGRATIONS:

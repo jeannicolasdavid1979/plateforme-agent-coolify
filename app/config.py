@@ -46,12 +46,16 @@ class Settings(BaseSettings):
     service_fee_rate: float = 0.10
 
     # ── Hébergement récurrent (revenu mensuel) ────────────────────────
-    # Chaque agent déployé est hébergé contre un abonnement mensuel. Le client
-    # peut payer au mois (renouvellement manuel, chrono FOMO) ou à l'année.
-    hosting_price_eur: float = 19.0          # par mois
-    hosting_annual_price_eur: float = 190.0  # à l'année (≈ 2 mois offerts)
-    hosting_grace_days: int = 0              # jours de tolérance après l'échéance avant suspension
-    hosting_retention_days: int = 30         # jours de rétention (restaurable) avant suppression définitive
+    # Deux offres :
+    #  • SANS ENGAGEMENT : location au mois, prolongation MANUELLE avant la date
+    #    anniversaire (chrono FOMO). Plus chère car sans engagement.
+    #  • ABONNEMENT (engagé 12 mois) : soit prélèvement Stripe automatique au
+    #    mois, soit payé en une fois à l'année avec un mois offert. Moins cher.
+    hosting_manual_eur: float = 29.0        # sans engagement, 1 mois, renouvellement manuel
+    hosting_sub_monthly_eur: float = 19.0   # abonnement auto (prélevé Stripe), par mois
+    hosting_annual_eur: float = 209.0       # 12 mois payés en 1 fois (19 × 11, 1 mois offert)
+    hosting_grace_days: int = 0             # jours de tolérance après l'échéance avant suspension
+    hosting_retention_days: int = 30        # jours de rétention (restaurable) avant suppression définitive
 
     # Stripe — les liens de paiement sont saisis dans l'admin (table settings).
     # Le secret de webhook, lui, est un secret d'infra : variable d'environnement.

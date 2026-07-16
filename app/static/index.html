@@ -186,6 +186,34 @@
   @keyframes fomopulse { 0%,100% { opacity:1; } 50% { opacity:.5; } }
   @media (prefers-reduced-motion: reduce) { .fomo-countdown.hot { animation:none; } }
 
+  /* Admin : cartes « produit » (montant + lien Stripe groupés) */
+  .prod-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr));
+               gap:16px; margin-top:24px; }
+  .prod-card { border:1px solid var(--line); border-radius:18px; padding:20px;
+               background:linear-gradient(180deg, rgba(255,255,255,.02), rgba(255,255,255,0)); }
+  .prod-card.wide { margin-top:20px; }
+  .prod-card.featured { border-color:var(--accent);
+               box-shadow:0 10px 40px rgba(0,0,0,.25), inset 0 0 0 1px rgba(120,160,255,.12); }
+  .prod-head { display:flex; align-items:center; gap:10px; }
+  .prod-head h3 { font-size:16px; margin:0; font-weight:650; }
+  .prod-ico { font-size:20px; line-height:1; }
+  .prod-tag { margin-left:auto; font-size:11px; font-weight:600; letter-spacing:.04em;
+              text-transform:uppercase; color:var(--accent);
+              border:1px solid var(--accent); border-radius:999px; padding:2px 9px; }
+  .prod-sub { color:var(--muted); font-size:13px; margin:8px 0 14px; line-height:1.5; }
+  .prod-card label { display:block; font-size:12px; color:var(--muted); margin-top:12px; }
+  .prod-card label .hint { color:var(--muted); opacity:.7; font-weight:400; }
+  .prod-card input { margin-top:5px; }
+  .inline-fields { display:flex; flex-wrap:wrap; gap:16px; align-items:flex-end; margin-top:8px; }
+  .inline-fields label { flex:1; min-width:160px; margin-top:0; }
+  .pill { display:inline-block; font-size:12px; padding:2px 10px; border-radius:999px;
+          border:1px solid var(--line); color:var(--muted); }
+  .topup-rows { margin:14px 0 10px; display:flex; flex-direction:column; gap:8px; }
+  .topup-row { display:flex; gap:8px; align-items:center; }
+  .topup-row .tr-amount { max-width:110px; }
+  .topup-row .tr-link { flex:1; }
+  .topup-row button { flex:0 0 auto; padding:8px 12px; }
+
   /* Pied de page légal */
   .site-footer { max-width:1120px; margin:80px auto 0; padding:28px 32px 48px;
                  border-top:1px solid var(--line); display:flex; flex-wrap:wrap;
@@ -285,78 +313,72 @@
   <!-- Section : Réglages business (admin) -->
   <section id="settings" class="hidden">
     <div class="eyebrow">Réglages business</div>
-    <h2>Vos prix, vos règles</h2>
-    <div class="grid" style="margin-top:24px">
-      <div class="card">
-        <div class="muted">Prix du déploiement (€)</div>
-        <input id="p-deploy" type="number" min="0" step="0.5">
+    <h2>Vos offres, vos prix, vos liens</h2>
+    <p class="muted" style="max-width:680px">Chaque offre réunit son <b>montant</b> et son
+      <b>lien de paiement Stripe</b>. Sans lien, la page de paiement simulée reste utilisée —
+      pratique pour tester avant de brancher Stripe. Webhook :
+      <code>/api/stripe/webhook</code>. <span id="wh-state" class="pill"></span></p>
+
+    <div class="prod-grid">
+      <!-- Déploiement -->
+      <div class="prod-card">
+        <div class="prod-head"><span class="prod-ico">🚀</span><h3>Déploiement</h3></div>
+        <p class="prod-sub">Frais unique de création de l'agent (1er mois d'hébergement inclus).</p>
+        <label>Prix (€)<input id="p-deploy" type="number" min="0" step="0.5"></label>
+        <label>Crédit IA offert (€)<input id="p-credit" type="number" min="0" step="0.5"></label>
+        <label>Lien Stripe<input id="s-deploy" type="url" placeholder="https://buy.stripe.com/…"></label>
       </div>
-      <div class="card">
-        <div class="muted">Recharge par défaut (€)</div>
-        <input id="p-topup" type="number" min="0" step="0.5">
+
+      <!-- Hébergement sans engagement -->
+      <div class="prod-card">
+        <div class="prod-head"><span class="prod-ico">📅</span><h3>Hébergement — sans engagement</h3></div>
+        <p class="prod-sub">Location au mois, prolongation <b>manuelle</b> avant l'échéance (chrono FOMO).</p>
+        <label>Prix / mois (€)<input id="p-hosting-manual" type="number" min="0" step="1"></label>
+        <label>Lien Stripe <span class="hint">paiement unique</span><input id="s-host-manual" type="url" placeholder="https://buy.stripe.com/…"></label>
       </div>
-      <div class="card">
-        <div class="muted">Crédit IA offert au lancement (€)</div>
-        <input id="p-credit" type="number" min="0" step="0.5">
+
+      <!-- Abonnement mensuel auto -->
+      <div class="prod-card featured">
+        <div class="prod-head"><span class="prod-ico">♾️</span><h3>Abonnement mensuel</h3><span class="prod-tag">recommandé</span></div>
+        <p class="prod-sub">Prélèvement <b>automatique</b> Stripe, engagé 12 mois. Moins cher, sans effort.</p>
+        <label>Prix / mois (€)<input id="p-hosting-sub" type="number" min="0" step="1"></label>
+        <label>Lien Stripe <span class="hint">abonnement récurrent</span><input id="s-host-sub" type="url" placeholder="https://buy.stripe.com/…"></label>
       </div>
-      <div class="card">
-        <div class="muted">Frais de service sur les recharges (%)</div>
-        <input id="p-fee" type="number" min="0" max="100" step="1">
-        <div class="muted" style="margin-top:6px;font-size:12px">Ajouté au montant payé par le client ; le crédit IA reçu reste le montant choisi.</div>
+
+      <!-- Abonnement annuel -->
+      <div class="prod-card">
+        <div class="prod-head"><span class="prod-ico">🎁</span><h3>Abonnement annuel</h3></div>
+        <p class="prod-sub">12 mois payés en une fois, <b>un mois offert</b>.</p>
+        <label>Prix / an (€)<input id="p-hosting-annual" type="number" min="0" step="1"></label>
+        <label>Lien Stripe <span class="hint">paiement unique</span><input id="s-host-annual" type="url" placeholder="https://buy.stripe.com/…"></label>
       </div>
-      <div class="card">
-        <div class="muted">Hébergement — mensuel (€)</div>
-        <input id="p-hosting" type="number" min="0" step="1">
-      </div>
-      <div class="card">
-        <div class="muted">Hébergement — annuel (€)</div>
-        <input id="p-hosting-annual" type="number" min="0" step="1">
-      </div>
-      <div class="card">
-        <div class="muted">Grâce après échéance (jours)</div>
-        <input id="p-grace" type="number" min="0" step="1">
-      </div>
-      <div class="card">
-        <div class="muted">Rétention avant suppression (jours)</div>
-        <input id="p-retention" type="number" min="0" step="1">
-        <div class="muted" style="margin-top:6px;font-size:12px">Fenêtre pendant laquelle un compte suspendu reste restaurable par l'admin.</div>
-      </div>
-      <div class="card">
-        <div class="muted">Montants de recharge proposés (séparés par des virgules)</div>
-        <input id="p-amounts" type="text" placeholder="5,10,20,50,100">
-      </div>
-    </div>
-    <div class="row" style="margin-top:16px">
-      <button class="ghost" onclick="savePricing()">Enregistrer les réglages</button>
-      <span id="pricing-msg" class="muted"></span>
     </div>
 
-    <h2 style="margin-top:40px">Liens de paiement Stripe</h2>
-    <p class="muted" style="max-width:640px">Collez ici vos <b>Payment Links</b> Stripe. Au paiement,
-      le client y est redirigé et son compte est crédité automatiquement via le webhook
-      <code id="wh-url">/api/stripe/webhook</code> (identifie le paiement par <code>client_reference_id</code>).
-      Sans lien, la page de paiement simulée reste utilisée. <span id="wh-state"></span></p>
-    <div class="grid" style="margin-top:16px">
-      <div class="card">
-        <div class="muted">Lien — déploiement</div>
-        <input id="s-deploy" type="url" placeholder="https://buy.stripe.com/...">
+    <!-- Recharges : montant + lien groupés, en lignes -->
+    <div class="prod-card wide">
+      <div class="prod-head"><span class="prod-ico">⚡</span><h3>Recharges de crédit IA</h3></div>
+      <p class="prod-sub">Chaque montant proposé et son lien Stripe. Les frais de service sont ajoutés au paiement ; le crédit reçu reste le montant choisi.</p>
+      <div class="inline-fields">
+        <label>Recharge par défaut (€)<input id="p-topup" type="number" min="0" step="0.5"></label>
+        <label>Frais de service (%)<input id="p-fee" type="number" min="0" max="100" step="1"></label>
       </div>
-      <div class="card">
-        <div class="muted">Lien — hébergement mensuel</div>
-        <input id="s-host-monthly" type="url" placeholder="https://buy.stripe.com/...">
-      </div>
-      <div class="card">
-        <div class="muted">Lien — hébergement annuel</div>
-        <input id="s-host-annual" type="url" placeholder="https://buy.stripe.com/...">
-      </div>
-      <div class="card">
-        <div class="muted">Liens — recharges (un par ligne : <code>montant=lien</code>)</div>
-        <textarea id="s-topup" rows="4" placeholder="10=https://buy.stripe.com/...&#10;20=https://buy.stripe.com/..."></textarea>
+      <div id="topup-rows" class="topup-rows"></div>
+      <button class="ghost mini" type="button" onclick="addTopupRow()">+ Ajouter un montant</button>
+    </div>
+
+    <!-- Cycle de vie de l'hébergement -->
+    <div class="prod-card wide">
+      <div class="prod-head"><span class="prod-ico">⏳</span><h3>Cycle de vie de l'hébergement</h3></div>
+      <p class="prod-sub">À l'échéance impayée : suspension, puis suppression au bout de la rétention. L'admin peut restaurer dans l'intervalle.</p>
+      <div class="inline-fields">
+        <label>Grâce après échéance (jours)<input id="p-grace" type="number" min="0" step="1"></label>
+        <label>Rétention avant suppression (jours)<input id="p-retention" type="number" min="0" step="1"></label>
       </div>
     </div>
-    <div class="row" style="margin-top:16px">
-      <button class="ghost" onclick="saveStripe()">Enregistrer les liens Stripe</button>
-      <span id="stripe-msg" class="muted"></span>
+
+    <div class="row" style="margin-top:24px;align-items:center">
+      <button onclick="saveAll()">Enregistrer tous les réglages</button>
+      <span id="pricing-msg" class="muted"></span>
     </div>
   </section>
 
@@ -425,8 +447,9 @@ const STEP_LABELS = {
 };
 const STATUS_LABELS = { awaiting_payment: 'à payer', pending: 'en attente', deploying: 'déploiement', running: 'en ligne', failed: 'échec' };
 let pricing = { deploy_price_eur: 0, topup_amount_eur: 0, initial_credit_eur: 0, service_fee_rate: 0,
-                hosting_price_eur: 19, hosting_annual_price_eur: 190, hosting_grace_days: 0,
-                hosting_retention_days: 30, topup_amounts_eur: [] };
+                hosting_manual_eur: 29, hosting_sub_monthly_eur: 19, hosting_annual_eur: 209,
+                hosting_grace_days: 0, hosting_retention_days: 30, topup_amounts_eur: [] };
+let stripeLinks = { deploy: '', hosting_manual: '', hosting_sub: '', hosting_annual: '', topup: {} };
 const eur = (n) => Number(n || 0).toFixed(2).replace('.', ',');
 
 function errorMessage(detail, fallback) {
@@ -496,66 +519,88 @@ async function loadPricing() {
     $('p-credit').value = pricing.initial_credit_eur;
     // Taux stocké en fraction (0.10) côté serveur, saisi en % côté admin
     if ($('p-fee')) $('p-fee').value = Math.round((pricing.service_fee_rate || 0) * 100);
-    if ($('p-hosting')) $('p-hosting').value = pricing.hosting_price_eur;
-    if ($('p-hosting-annual')) $('p-hosting-annual').value = pricing.hosting_annual_price_eur;
+    if ($('p-hosting-manual')) $('p-hosting-manual').value = pricing.hosting_manual_eur;
+    if ($('p-hosting-sub')) $('p-hosting-sub').value = pricing.hosting_sub_monthly_eur;
+    if ($('p-hosting-annual')) $('p-hosting-annual').value = pricing.hosting_annual_eur;
     if ($('p-grace')) $('p-grace').value = Math.round(pricing.hosting_grace_days || 0);
     if ($('p-retention')) $('p-retention').value = Math.round(pricing.hosting_retention_days || 30);
-    // Nombres bruts (point décimal) : les virgules servent de séparateurs
-    if ($('p-amounts')) $('p-amounts').value = (pricing.topup_amounts_eur || []).join(', ');
+    renderTopupRows();
   } catch (e) { /* valeurs par défaut serveur */ }
+}
+
+// Lignes de recharge : chaque montant proposé + son lien Stripe, groupés.
+function topupRowHtml(amount, link) {
+  return `<div class="topup-row">
+    <input class="tr-amount" type="number" min="0" step="0.5" value="${amount != null ? amount : ''}" placeholder="€">
+    <input class="tr-link" type="url" value="${(link || '').replace(/"/g, '&quot;')}" placeholder="Lien Stripe (optionnel)">
+    <button class="ghost mini" type="button" onclick="this.parentNode.remove()" title="Retirer">×</button>
+  </div>`;
+}
+function renderTopupRows() {
+  const box = $('topup-rows');
+  if (!box) return;
+  const amounts = pricing.topup_amounts_eur || [];
+  const links = stripeLinks.topup || {};
+  const key = (a) => (Number.isInteger(a) ? String(a) : String(a));
+  box.innerHTML = amounts.map(a => topupRowHtml(a, links[key(a)])).join('') || topupRowHtml('', '');
+}
+function addTopupRow() {
+  const box = $('topup-rows');
+  if (box) box.insertAdjacentHTML('beforeend', topupRowHtml('', ''));
 }
 
 async function loadStripe() {
   if (!isAdmin || !$('s-deploy')) return;
   try {
     const d = await api('/api/admin/stripe');
-    const L = d.links || {};
-    $('s-deploy').value = L.deploy || '';
-    $('s-host-monthly').value = L.hosting_monthly || '';
-    $('s-host-annual').value = L.hosting_annual || '';
-    $('s-topup').value = Object.entries(L.topup || {}).map(([k, v]) => `${k}=${v}`).join('\n');
+    stripeLinks = Object.assign({topup: {}}, d.links || {});
+    $('s-deploy').value = stripeLinks.deploy || '';
+    $('s-host-manual').value = stripeLinks.hosting_manual || '';
+    $('s-host-sub').value = stripeLinks.hosting_sub || '';
+    $('s-host-annual').value = stripeLinks.hosting_annual || '';
+    renderTopupRows();  // réaffiche les lignes avec leurs liens
     $('wh-state').textContent = d.webhook_configured
-      ? '✔ Secret de webhook configuré.'
-      : '⚠ Secret de webhook absent (STRIPE_WEBHOOK_SECRET) — signatures non vérifiées.';
+      ? '✔ Webhook signé' : '⚠ Webhook non signé (STRIPE_WEBHOOK_SECRET absent)';
   } catch (e) { /* non-admin ou indisponible */ }
 }
 
-async function saveStripe() {
-  $('stripe-msg').textContent = '';
-  const topup = {};
-  ($('s-topup').value || '').split('\n').forEach(line => {
-    const i = line.indexOf('=');
-    if (i > 0) { const k = line.slice(0, i).trim(); const v = line.slice(i + 1).trim(); if (k && v) topup[k] = v; }
+// Un seul bouton : enregistre prix + liens Stripe ensemble.
+async function saveAll() {
+  const msg = $('pricing-msg'); msg.textContent = 'Enregistrement…';
+  // Recharges : reconstruit la liste des montants + la map des liens depuis les lignes.
+  const amounts = [], topup = {};
+  document.querySelectorAll('#topup-rows .topup-row').forEach(r => {
+    const a = parseFloat(r.querySelector('.tr-amount').value);
+    const l = r.querySelector('.tr-link').value.trim();
+    if (a > 0) {
+      amounts.push(a);
+      if (l) topup[Number.isInteger(a) ? String(a) : String(a)] = l;
+    }
   });
   try {
-    await api('/api/admin/stripe', {method: 'PUT', body: JSON.stringify({
-      deploy: $('s-deploy').value.trim(),
-      hosting_monthly: $('s-host-monthly').value.trim(),
-      hosting_annual: $('s-host-annual').value.trim(),
-      topup,
-    })});
-    $('stripe-msg').textContent = '✔ Liens Stripe enregistrés';
-    loadStripe();
-  } catch (e) { $('stripe-msg').textContent = e.message; }
-}
-
-async function savePricing() {
-  $('pricing-msg').textContent = '';
-  try {
-    pricing = await api('/api/admin/pricing', {method:'PUT', body: JSON.stringify({
+    pricing = await api('/api/admin/pricing', {method: 'PUT', body: JSON.stringify({
       deploy_price_eur: parseFloat($('p-deploy').value),
       topup_amount_eur: parseFloat($('p-topup').value),
       initial_credit_eur: parseFloat($('p-credit').value),
       service_fee_rate: (parseFloat($('p-fee').value) || 0) / 100,
-      hosting_price_eur: parseFloat($('p-hosting').value),
-      hosting_annual_price_eur: parseFloat($('p-hosting-annual').value),
+      hosting_manual_eur: parseFloat($('p-hosting-manual').value),
+      hosting_sub_monthly_eur: parseFloat($('p-hosting-sub').value),
+      hosting_annual_eur: parseFloat($('p-hosting-annual').value),
       hosting_grace_days: parseInt($('p-grace').value) || 0,
       hosting_retention_days: parseInt($('p-retention').value) || 0,
-      topup_amounts_eur: $('p-amounts').value.replace(/\s|€/g, ''),
+      topup_amounts_eur: amounts.join(','),
     })});
-    $('pricing-msg').textContent = '✔ Réglages enregistrés';
-    loadPricing(); renderCachedTenants();
-  } catch (e) { $('pricing-msg').textContent = e.message; }
+    await api('/api/admin/stripe', {method: 'PUT', body: JSON.stringify({
+      deploy: $('s-deploy').value.trim(),
+      hosting_manual: $('s-host-manual').value.trim(),
+      hosting_sub: $('s-host-sub').value.trim(),
+      hosting_annual: $('s-host-annual').value.trim(),
+      topup,
+    })});
+    msg.textContent = '✔ Tous les réglages enregistrés';
+    await loadStripe();
+    renderCachedTenants();
+  } catch (e) { msg.textContent = e.message; }
 }
 
 async function createAgent() {
@@ -638,12 +683,18 @@ function fmtCountdown(ms) {
 function hostingHtml(a) {
   const h = a.hosting || {};
   if (h.state === 'none') return '';
-  const monthly = eur(pricing.hosting_price_eur), annual = eur(pricing.hosting_annual_price_eur);
-  const renew = `
+  const manual = eur(pricing.hosting_manual_eur),
+        sub = eur(pricing.hosting_sub_monthly_eur),
+        annual = eur(pricing.hosting_annual_eur);
+  // Trois choix : prolonger sans engagement, s'abonner (auto), ou payer l'année.
+  const offers = `
     <div class="row" style="margin-top:10px;gap:8px;flex-wrap:wrap">
-      <button class="chip" onclick="subscribe('${a.id}','monthly')">Renouveler — ${monthly} €/mois</button>
-      <button class="chip" onclick="subscribe('${a.id}','annual')">Passer à l'année — ${annual} €</button>
+      <button class="chip" onclick="subscribe('${a.id}','manual')">Prolonger 1 mois — ${manual} €<span class="chip-total">sans engagement</span></button>
+      <button class="chip" onclick="subscribe('${a.id}','sub_monthly')">S'abonner — ${sub} €/mois<span class="chip-total">auto, 12 mois</span></button>
+      <button class="chip" onclick="subscribe('${a.id}','sub_annual')">12 mois — ${annual} €<span class="chip-total">1 mois offert</span></button>
     </div>`;
+
+  // Suspendu : régularisation urgente avant suppression définitive.
   if (h.suspended || h.state === 'suspended' || h.state === 'deletable') {
     const until = h.delete_at ? Date.parse(h.delete_at) : 0;
     return `
@@ -651,18 +702,38 @@ function hostingHtml(a) {
         <strong>⛔️ Agent suspendu — hébergement impayé</strong>
         <div class="muted" style="margin-top:6px">Réglez pour réactiver immédiatement. Sans régularisation,
           suppression <b>définitive</b> dans <span class="fomo-countdown hot" data-until="${until}">…</span>.</div>
-        ${renew}
+        ${offers}
         ${isAdmin ? `<div class="row" style="margin-top:8px"><button class="ghost mini" onclick="adminRestore('${a.id}')">Restaurer (admin)</button></div>` : ''}
       </div>`;
   }
+
   const until = h.paid_until ? Date.parse(h.paid_until) : 0;
+
+  // Abonnement automatique : message serein, pas de FOMO.
+  if (h.plan === 'sub_monthly' || h.plan === 'sub_annual') {
+    const label = h.plan === 'sub_annual' ? 'annuel' : 'mensuel automatique';
+    const nextLabel = h.plan === 'sub_annual' ? 'échéance' : 'prochain prélèvement';
+    return `
+      <div class="hosting fade-up">
+        <span class="muted">✅ Abonnement ${label} actif — ${nextLabel} dans
+          <span class="fomo-countdown" data-until="${until}">…</span>.
+          Reconduction sans action de votre part.</span>
+        ${h.plan === 'sub_monthly' ? `
+        <div class="row" style="margin-top:10px">
+          <button class="chip" onclick="subscribe('${a.id}','sub_annual')">Passer à l'année — ${annual} €<span class="chip-total">1 mois offert</span></button>
+        </div>` : ''}
+      </div>`;
+  }
+
+  // Sans engagement (manual/none) : FOMO explicite.
   const urgent = (h.seconds_left != null && h.seconds_left < 7 * 86400);
   return `
     <div class="hosting fade-up${urgent ? ' urgent' : ''}">
-      <span class="muted">Hébergement ${h.plan === 'annual' ? 'annuel' : 'mensuel'} —
-        ${urgent ? '⏳ ' : ''}renouvellement dans
-        <span class="fomo-countdown${urgent ? ' hot' : ''}" data-until="${until}">…</span></span>
-      ${renew}
+      <span class="muted"><b>Sans engagement</b> — vous perdez l'agent en fin de mois
+        sauf prolongation. ${urgent ? '⏳ ' : ''}Il reste
+        <span class="fomo-countdown${urgent ? ' hot' : ''}" data-until="${until}">…</span>
+        avant l'échéance. Prolongez, ou passez à l'abonnement (moins cher).</span>
+      ${offers}
     </div>`;
 }
 

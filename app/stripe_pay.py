@@ -24,8 +24,9 @@ from .models import Setting
 # Clés de réglages (table settings) pour les liens Stripe.
 LINK_KEYS = {
     "deploy": "stripe_link_deploy",
-    "hosting_monthly": "stripe_link_hosting_monthly",
-    "hosting_annual": "stripe_link_hosting_annual",
+    "hosting_manual": "stripe_link_hosting_manual",   # sans engagement (29€)
+    "hosting_sub": "stripe_link_hosting_sub",         # abonnement auto (19€/mois, mode subscription)
+    "hosting_annual": "stripe_link_hosting_annual",   # 12 mois payés en une fois (209€)
 }
 TOPUP_LINKS_KEY = "stripe_links_topup"  # JSON : {"10": "https://buy.stripe.com/...", ...}
 
@@ -44,7 +45,8 @@ def get_links(db: Session) -> dict:
         topup = {}
     return {
         "deploy": _get(db, LINK_KEYS["deploy"]),
-        "hosting_monthly": _get(db, LINK_KEYS["hosting_monthly"]),
+        "hosting_manual": _get(db, LINK_KEYS["hosting_manual"]),
+        "hosting_sub": _get(db, LINK_KEYS["hosting_sub"]),
         "hosting_annual": _get(db, LINK_KEYS["hosting_annual"]),
         "topup": topup,  # {montant(str): url}
     }
@@ -55,7 +57,11 @@ def _link_for(db: Session, kind: str, amount_eur: float | None, plan: str | None
     if kind == "deploy":
         return links["deploy"]
     if kind == "hosting":
-        return links["hosting_annual"] if plan == "annual" else links["hosting_monthly"]
+        if plan == "sub_annual":
+            return links["hosting_annual"]
+        if plan == "sub_monthly":
+            return links["hosting_sub"]
+        return links["hosting_manual"]
     if kind == "topup" and amount_eur is not None:
         # clé indexée sur le montant entier si possible (« 10 »), sinon brut
         key = str(int(amount_eur)) if float(amount_eur).is_integer() else str(amount_eur)

@@ -189,13 +189,21 @@ voit le total à payer frais inclus (ex. 11 €), et reçoit exactement le créd
 choisi sur son agent (le plafond de sa clé OpenRouter est relevé de 10 €). Le
 taux est modifiable dans **« Réglages business »** (0 à 100 %).
 
-### Abonnement d'hébergement (revenu récurrent) & chrono FOMO
+### Hébergement : sans engagement ou abonnement (revenu récurrent)
 
-Chaque agent déployé est hébergé contre un **abonnement mensuel** (19 € par
-défaut) ou **annuel** (190 €). Le **premier mois est inclus** dans le
-déploiement. Sur la carte de l'agent, un **compte à rebours** affiche le temps
-restant avant l'échéance (jours → heures → minutes, passage en rouge sous 7
-jours) avec les boutons **Renouveler** / **Passer à l'année**.
+Le **premier mois est inclus** dans le déploiement. Ensuite, deux formules :
+
+- **Sans engagement — 29 €/mois** : location au mois, **prolongation manuelle**
+  avant l'échéance. Sur la carte, un **compte à rebours FOMO** (jours → heures →
+  minutes, rouge sous 7 j) prévient qu'on **perd l'agent en fin de mois** sans
+  action. Aucun prélèvement automatique.
+- **Abonnement — 19 €/mois** (engagé 12 mois) : **prélèvement Stripe
+  automatique**, l'agent tourne seul. Message serein (pas de FOMO). Également
+  disponible **payé en une fois : 209 €/an** (un mois offert). Moins cher que le
+  sans-engagement — c'est l'offre poussée.
+
+Tous les montants sont **réglables dans l'admin**. Le déploiement démarre en
+« sans engagement » pour orienter le client vers l'abonnement.
 
 Cycle de vie (paramétrable dans *Réglages business*) :
 

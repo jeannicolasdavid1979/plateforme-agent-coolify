@@ -54,8 +54,9 @@ class PricingUpdate(BaseModel):
     topup_amount_eur: float | None = None
     initial_credit_eur: float | None = None
     service_fee_rate: float | None = None  # 0.10 = +10 % sur les recharges
-    hosting_price_eur: float | None = None
-    hosting_annual_price_eur: float | None = None
+    hosting_manual_eur: float | None = None
+    hosting_sub_monthly_eur: float | None = None
+    hosting_annual_eur: float | None = None
     hosting_grace_days: float | None = None
     hosting_retention_days: float | None = None
     topup_amounts_eur: str | None = None  # liste "5,10,20,50,100"
@@ -66,12 +67,13 @@ class TopupRequest(BaseModel):
 
 
 class HostingRequest(BaseModel):
-    plan: str = "monthly"  # "monthly" | "annual"
+    plan: str = "manual"  # "manual" | "sub_monthly" | "sub_annual"
 
 
 class StripeLinksUpdate(BaseModel):
     deploy: str | None = None
-    hosting_monthly: str | None = None
+    hosting_manual: str | None = None
+    hosting_sub: str | None = None
     hosting_annual: str | None = None
     topup: dict[str, str] | None = None  # {"10": "https://buy.stripe.com/...", ...}
 
@@ -83,11 +85,19 @@ PRICING_KEYS = (
     "topup_amount_eur",
     "initial_credit_eur",
     "service_fee_rate",
-    "hosting_price_eur",
-    "hosting_annual_price_eur",
+    "hosting_manual_eur",
+    "hosting_sub_monthly_eur",
+    "hosting_annual_eur",
     "hosting_grace_days",
     "hosting_retention_days",
 )
+
+# Plans d'hébergement → (clé de prix, nombre de mois crédités)
+HOSTING_PLANS = {
+    "manual": ("hosting_manual_eur", 1),       # sans engagement, prolongation d'un mois
+    "sub_monthly": ("hosting_sub_monthly_eur", 1),  # abonnement auto, 1 mois par prélèvement
+    "sub_annual": ("hosting_annual_eur", 12),  # 12 mois payés en une fois
+}
 
 
 def topup_charge(credit_eur: float, fee_rate: float) -> float:
@@ -416,27 +426,30 @@ def create_hosting_checkout(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ):
-    """Renouvelle (ou souscrit) l'abonnement d'hébergement de l'agent : mensuel
-    (19 €) ou annuel. Crée un Checkout `hosting` et renvoie le lien de paiement
-    (Stripe si configuré, sinon page simulée)."""
+    """Souscrit/renouvelle l'hébergement de l'agent. Trois plans :
+    - `manual`     : location sans engagement (29 €), prolonge d'un mois ;
+    - `sub_monthly`: abonnement auto prélevé Stripe (19 €/mois) ;
+    - `sub_annual` : 12 mois payés en une fois (209 €, un mois offert).
+    Crée un Checkout `hosting` et renvoie le lien de paiement (Stripe si
+    configuré, sinon page simulée)."""
     agent = db.get(Tenant, agent_id)
     if not agent or agent.user_id != user.id:
         raise HTTPException(404, "Agent non trouvé")
-    plan = (body.plan if body else "monthly") or "monthly"
-    if plan not in ("monthly", "annual"):
-        raise HTTPException(400, "Plan invalide (monthly ou annual)")
-    p = get_pricing(db)
-    price = p["hosting_annual_price_eur"] if plan == "annual" else p["hosting_price_eur"]
+    plan = (body.plan if body else "manual") or "manual"
+    if plan not in HOSTING_PLANS:
+        raise HTTPException(400, "Plan invalide (manual, sub_monthly ou sub_annual)")
+    price_key, _months = HOSTING_PLANS[plan]
+    price = round(float(get_pricing(db)[price_key]), 2)
     checkout = Checkout(
-        user_id=user.id, tenant_id=agent_id, kind="hosting",
-        amount_eur=round(float(price), 2), credit_eur=0.0,
+        user_id=user.id, tenant_id=agent_id, kind="hosting", plan=plan,
+        amount_eur=price, credit_eur=0.0,
     )
     db.add(checkout)
     db.commit()
     return {
         "checkout_url": _checkout_url(db, checkout, email=user.email, plan=plan),
         "plan": plan,
-        "amount_eur": round(float(price), 2),
+        "amount_eur": price,
     }
 
 
@@ -463,8 +476,9 @@ def _apply_paid_checkout(db: Session, checkout: Checkout) -> Tenant | None:
     tenant.balance_eur = (tenant.balance_eur or 0.0) + (checkout.credit_eur or 0.0)
 
     if checkout.kind == "deploy" and tenant.status == "awaiting_payment":
-        # Le déploiement inclut le premier mois d'hébergement.
-        tenant.hosting_plan = "monthly"
+        # Le déploiement inclut le premier mois — sans engagement par défaut :
+        # le chrono FOMO poussera ensuite vers l'abonnement (moins cher).
+        tenant.hosting_plan = "manual"
         tenant.hosting_paid_until = extend_period(None, 1)
         tenant.suspended_at = None
         tenant.status = "pending"
@@ -475,11 +489,10 @@ def _apply_paid_checkout(db: Session, checkout: Checkout) -> Tenant | None:
         return tenant
 
     if checkout.kind == "hosting":
-        # Plan déduit du montant : annuel si == prix annuel configuré, sinon mensuel.
-        plan = "annual" if _is_annual(checkout, db) else "monthly"
-        months = 12 if plan == "annual" else 1
+        plan = checkout.plan or "manual"
+        _months = HOSTING_PLANS.get(plan, ("", 1))[1]
         tenant.hosting_plan = plan
-        tenant.hosting_paid_until = extend_period(tenant.hosting_paid_until, months)
+        tenant.hosting_paid_until = extend_period(tenant.hosting_paid_until, _months)
         _resume_if_suspended(db, tenant)
         db.commit()
         return tenant
@@ -501,17 +514,6 @@ def _apply_paid_checkout(db: Session, checkout: Checkout) -> Tenant | None:
                     "relever le plafond manuellement", tenant.name, exc,
                 )
     return tenant
-
-
-def _is_annual(checkout: Checkout, db: Session | None = None) -> bool:
-    """Un checkout d'hébergement est annuel si son montant == prix annuel."""
-    if db is None:
-        return False
-    try:
-        annual = float(get_pricing(db)["hosting_annual_price_eur"])
-    except Exception:
-        return False
-    return round(checkout.amount_eur, 2) == round(annual, 2)
 
 
 def _resume_if_suspended(db: Session, tenant: Tenant) -> None:
@@ -578,8 +580,9 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
         if sub:
             tenant = db.scalar(select(Tenant).where(Tenant.stripe_subscription_id == sub))
             if tenant:
-                # Renouvellement auto : prolonge d'un mois et réactive si suspendu.
-                tenant.hosting_plan = "monthly"
+                # Renouvellement auto (abonnement Stripe) : prolonge d'un mois
+                # et réactive si suspendu.
+                tenant.hosting_plan = "sub_monthly"
                 tenant.hosting_paid_until = extend_period(tenant.hosting_paid_until, 1)
                 _resume_if_suspended(db, tenant)
                 db.commit()
@@ -606,10 +609,13 @@ def pay_page(checkout_id: str, db: Session = Depends(get_db)):
         description = f"Déploiement de l'agent « {tenant.name} »"
         note_credit = f"{checkout.credit_eur:.2f}".replace(".", ",") + " € de crédit IA offerts au lancement (1er mois d'hébergement inclus)"
     elif checkout.kind == "hosting":
-        annual = _is_annual(checkout, db)
-        description = f"Hébergement {'annuel' if annual else 'mensuel'} — {tenant.name}"
-        note_credit = ("Hébergement prolongé de 12 mois" if annual
-                       else "Hébergement prolongé d'un mois")
+        labels = {
+            "manual": ("Hébergement sans engagement", "Hébergement prolongé d'un mois"),
+            "sub_monthly": ("Abonnement hébergement mensuel", "Abonnement mensuel — prolongé d'un mois"),
+            "sub_annual": ("Abonnement hébergement annuel", "Hébergement prolongé de 12 mois (1 mois offert)"),
+        }
+        title, note_credit = labels.get(checkout.plan or "manual", labels["manual"])
+        description = f"{title} — {tenant.name}"
     else:
         description = f"Recharge de crédit IA — {tenant.name}"
         fee = round(checkout.amount_eur - checkout.credit_eur, 2)
@@ -823,8 +829,10 @@ def update_stripe_links(
 
     if body.deploy is not None:
         _upsert_setting(db, stripe_pay.LINK_KEYS["deploy"], body.deploy.strip())
-    if body.hosting_monthly is not None:
-        _upsert_setting(db, stripe_pay.LINK_KEYS["hosting_monthly"], body.hosting_monthly.strip())
+    if body.hosting_manual is not None:
+        _upsert_setting(db, stripe_pay.LINK_KEYS["hosting_manual"], body.hosting_manual.strip())
+    if body.hosting_sub is not None:
+        _upsert_setting(db, stripe_pay.LINK_KEYS["hosting_sub"], body.hosting_sub.strip())
     if body.hosting_annual is not None:
         _upsert_setting(db, stripe_pay.LINK_KEYS["hosting_annual"], body.hosting_annual.strip())
     if body.topup is not None:

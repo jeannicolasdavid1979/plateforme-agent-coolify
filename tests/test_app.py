@@ -825,12 +825,12 @@ def test_deploy_includes_first_hosting_month():
 
     db = SessionFactory()
     agent = db.get(Tenant, agent_id)
-    assert agent.hosting_plan == "monthly"
+    assert agent.hosting_plan == "manual"  # 1er mois inclus, sans engagement
     assert agent.hosting_paid_until is not None
     db.close()
     # L'API expose l'état d'hébergement
     h = client.get(f"/api/agents/{agent_id}", headers=headers).json()["hosting"]
-    assert h["state"] == "active" and h["plan"] == "monthly"
+    assert h["state"] == "active" and h["plan"] == "manual"
 
 
 def test_hosting_renewal_extends_period():
@@ -840,10 +840,10 @@ def test_hosting_renewal_extends_period():
 
     headers = _register("renew@example.com")  # crée le compte…
     agent_id = _running_agent("renew@example.com", "test-renew",
-                              hosting_plan="monthly")  # …puis un agent pour ce compte
-    # Renouvellement mensuel
-    resp = client.post(f"/api/agents/{agent_id}/hosting", json={"plan": "monthly"}, headers=headers)
-    assert resp.json()["amount_eur"] == 19.0
+                              hosting_plan="manual")  # …puis un agent pour ce compte
+    # Prolongation sans engagement : 29 €, +1 mois
+    resp = client.post(f"/api/agents/{agent_id}/hosting", json={"plan": "manual"}, headers=headers)
+    assert resp.json()["amount_eur"] == 29.0
     cid = resp.json()["checkout_url"].split("/pay/")[1]
     assert client.post(f"/api/pay/{cid}").status_code == 200
 
@@ -853,14 +853,18 @@ def test_hosting_renewal_extends_period():
     assert 28 <= delta <= 31  # ~1 mois
     db.close()
 
-    # Annuel : montant = prix annuel, ~12 mois
-    resp = client.post(f"/api/agents/{agent_id}/hosting", json={"plan": "annual"}, headers=headers)
-    assert resp.json()["amount_eur"] == 190.0
+    # Abonnement mensuel auto : 19 €
+    resp = client.post(f"/api/agents/{agent_id}/hosting", json={"plan": "sub_monthly"}, headers=headers)
+    assert resp.json()["amount_eur"] == 19.0
+
+    # Annuel : 209 €, plan sub_annual, ~12 mois
+    resp = client.post(f"/api/agents/{agent_id}/hosting", json={"plan": "sub_annual"}, headers=headers)
+    assert resp.json()["amount_eur"] == 209.0
     cid = resp.json()["checkout_url"].split("/pay/")[1]
     client.post(f"/api/pay/{cid}")
     db = SessionFactory()
     agent = db.get(Tenant, agent_id)
-    assert agent.hosting_plan == "annual"
+    assert agent.hosting_plan == "sub_annual"
     db.close()
 
 
@@ -973,6 +977,47 @@ def test_stripe_webhook_credits_topup(monkeypatch):
     client.post("/api/stripe/webhook", json=event)
     db = SessionFactory()
     assert db.get(Tenant, aid).balance_eur == 10.0
+    db.close()
+
+
+def test_stripe_subscription_webhook_flow(monkeypatch):
+    """Abonnement auto : checkout.session.completed mémorise l'abonnement Stripe,
+    puis invoice.paid prolonge automatiquement (plan sub_monthly)."""
+    from datetime import datetime, timezone
+    from app import api
+    from app.db import SessionFactory
+    from app.models import Checkout, Tenant
+
+    monkeypatch.setattr(api, "get_client", lambda: None)
+    headers = _register("subwh@example.com")
+    aid = _running_agent("subwh@example.com", "test-subwh", hosting_plan="manual")
+
+    # Le client souscrit l'abonnement mensuel auto → checkout hosting sub_monthly
+    data = client.post(f"/api/agents/{aid}/hosting", json={"plan": "sub_monthly"}, headers=headers).json()
+    assert data["amount_eur"] == 19.0
+    cid = data["checkout_url"].split("/pay/")[1]
+
+    # Stripe confirme avec l'id d'abonnement
+    client.post("/api/stripe/webhook", json={
+        "type": "checkout.session.completed",
+        "data": {"object": {"client_reference_id": cid, "subscription": "sub_ABC"}},
+    })
+    db = SessionFactory()
+    agent = db.get(Tenant, aid)
+    assert agent.hosting_plan == "sub_monthly"
+    assert agent.stripe_subscription_id == "sub_ABC"
+    first_until = agent.hosting_paid_until.replace(tzinfo=timezone.utc)
+    db.close()
+
+    # Un mois plus tard, Stripe prélève → invoice.paid prolonge
+    resp = client.post("/api/stripe/webhook", json={
+        "type": "invoice.paid", "data": {"object": {"subscription": "sub_ABC"}},
+    })
+    assert resp.status_code == 200
+    db = SessionFactory()
+    agent = db.get(Tenant, aid)
+    assert agent.hosting_paid_until.replace(tzinfo=timezone.utc) > first_until
+    assert agent.hosting_plan == "sub_monthly"
     db.close()
 
 

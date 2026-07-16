@@ -59,7 +59,8 @@ class Tenant(Base):
     # Abonnement d'hébergement (revenu récurrent). L'agent doit être « payé »
     # jusqu'à hosting_paid_until ; passé cette date sans renouvellement, il est
     # suspendu (conteneurs arrêtés) puis supprimé après la période de rétention.
-    hosting_plan: Mapped[str] = mapped_column(String(16), default="none")  # none|monthly|annual
+    # none | manual (sans engagement 29€) | sub_monthly (abo auto 19€) | sub_annual (209€/an)
+    hosting_plan: Mapped[str] = mapped_column(String(16), default="none")
     hosting_paid_until: Mapped[datetime | None] = mapped_column(nullable=True)
     suspended_at: Mapped[datetime | None] = mapped_column(nullable=True)
     # Abonnement Stripe auto-débité (mode auto) : sert à prolonger sur invoice.paid
@@ -94,7 +95,9 @@ class Checkout(Base):
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
     tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id"))
-    kind: Mapped[str] = mapped_column(String(16))  # "deploy" | "topup"
+    kind: Mapped[str] = mapped_column(String(16))  # "deploy" | "topup" | "hosting"
+    # Pour un checkout d'hébergement : manual | sub_monthly | sub_annual
+    plan: Mapped[str | None] = mapped_column(String(16), nullable=True)
     amount_eur: Mapped[float] = mapped_column(Float)
     credit_eur: Mapped[float] = mapped_column(Float, default=0.0)
     status: Mapped[str] = mapped_column(String(16), default="pending")  # "pending" | "paid"

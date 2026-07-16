@@ -210,8 +210,9 @@ def cgv(db: Session = Depends(get_db)):
     # Montants réellement appliqués (défauts de config surchargés par l'admin).
     from .api import get_pricing
     p = get_pricing(db)
-    monthly = f"{p['hosting_price_eur']:.2f}".replace(".", ",")
-    annual = f"{p['hosting_annual_price_eur']:.2f}".replace(".", ",")
+    manual = f"{p['hosting_manual_eur']:.2f}".replace(".", ",")
+    sub_monthly = f"{p['hosting_sub_monthly_eur']:.2f}".replace(".", ",")
+    annual = f"{p['hosting_annual_eur']:.2f}".replace(".", ",")
     retention = int(p["hosting_retention_days"])
     grace = int(p["hosting_grace_days"])
     grace_txt = (f" Un délai de grâce de {grace} jour(s) suit l'échéance avant suspension."
@@ -238,25 +239,29 @@ cas échéant. L'éditeur peut modifier ses tarifs à tout moment ; le prix
 applicable est celui affiché lors de la commande. Un crédit d'IA offert peut
 accompagner le premier déploiement.</p>
 
-<h2>4. Hébergement et abonnement récurrent</h2>
-<p>Chaque agent déployé est hébergé contre un <strong>abonnement d'hébergement</strong>.
-Le premier mois est inclus dans le déploiement. À l'échéance, l'abonnement doit
-être renouvelé pour maintenir l'agent en ligne, au choix :</p>
+<h2>4. Hébergement : sans engagement ou abonnement</h2>
+<p>Chaque agent déployé est hébergé. Le <strong>premier mois est inclus</strong>
+dans le déploiement. Ensuite, deux formules au choix :</p>
 <ul>
-  <li><strong>Mensuel</strong> : {monthly} € par mois, renouvellement avant la date
-  anniversaire mensuelle. Un compte à rebours vous indique le temps restant.</li>
-  <li><strong>Annuel</strong> : {annual} € pour douze mois.</li>
+  <li><strong>Sans engagement — {manual} € / mois</strong> : location au mois. Vous
+  devez <strong>prolonger manuellement</strong> avant la date anniversaire, faute de
+  quoi l'agent est perdu en fin de mois. Un compte à rebours vous indique le temps
+  restant. Aucun prélèvement automatique : rien n'est débité sans une action de
+  paiement de votre part.</li>
+  <li><strong>Abonnement — {sub_monthly} € / mois</strong> (engagement 12 mois) :
+  l'hébergement est reconduit <strong>automatiquement</strong> par prélèvement
+  Stripe, sans intervention. Résiliable depuis votre espace de facturation Stripe.
+  Également disponible <strong>payé en une fois : {annual} € pour douze mois</strong>
+  (un mois offert).</li>
 </ul>
-<p>À défaut de renouvellement à la date anniversaire, l'agent est
-<strong>suspendu</strong> (conteneurs arrêtés, accès interrompu).{grace_txt} Les
-données sont alors <strong>conservées {retention} jours</strong>, pendant lesquels
-le compte reste <strong>restaurable</strong> après régularisation (par vous via un
-paiement, ou par l'éditeur). Passé ce délai de {retention} jours de retard, l'agent
-et ses données sont <strong>supprimés définitivement</strong>, sans possibilité de
-restauration. La suspension ne donne lieu à aucun remboursement du crédit d'IA
-restant. Vous pouvez résilier à tout moment en cessant de renouveler ; aucun
-prélèvement n'intervient sans une action de paiement de votre part, sauf si vous
-avez souscrit un abonnement à débit automatique, résiliable depuis votre espace.</p>
+<p>À défaut de renouvellement à la date anniversaire (formule sans engagement) ou
+en cas d'échec de prélèvement (abonnement), l'agent est <strong>suspendu</strong>
+(conteneurs arrêtés, accès interrompu).{grace_txt} Les données sont alors
+<strong>conservées {retention} jours</strong>, pendant lesquels le compte reste
+<strong>restaurable</strong> après régularisation (par vous via un paiement, ou par
+l'éditeur). Passé ce délai de {retention} jours de retard, l'agent et ses données
+sont <strong>supprimés définitivement</strong>, sans possibilité de restauration. La
+suspension ne donne lieu à aucun remboursement du crédit d'IA restant.</p>
 
 <h2>5. Paiement</h2>
 <p>Le paiement s'effectue en ligne au moment de la commande. Le déploiement de
