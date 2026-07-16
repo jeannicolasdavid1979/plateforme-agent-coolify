@@ -432,7 +432,7 @@ def test_template_probe_cached_and_compose_creation(monkeypatch):
     engine = prov.ProvisioningEngine(db)
     detail = engine._step_deploy_service(tenant, None)
 
-    assert "compose personnalisé" in detail
+    assert "configuration personnalisée" in detail
     name, compose, urls = calls["compose_creates"][0]
     assert name == "hermes-test-tpl"
     assert "SERVICE_FQDN_HERMESWEBUI_8787=https://test-tpl.kechlab.com" in compose

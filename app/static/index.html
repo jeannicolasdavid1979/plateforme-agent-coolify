@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Hermes — Votre agent IA personnel, déployé sur Coolify</title>
+<title>Hermes — Votre agent IA personnel, en ligne</title>
 <style>
   /* 02 Color Engine (design/DESIGN.md — palette restreinte) */
   :root {
@@ -268,15 +268,15 @@
   <!-- Section : Hero (cinematic, reveal-word, portrait d'agent fourni) -->
   <section id="hero" class="hero">
     <div>
-      <div class="eyebrow fade-up">Infrastructure d'agents IA · Coolify</div>
+      <div class="eyebrow fade-up">Votre agent IA personnel, en ligne</div>
       <h1 id="h1"></h1>
       <p class="lead fade-up d3">Hermès portait les messages des dieux.
-      Le vôtre porte vos missions — déployé nativement sur Coolify,
-      isolé dans ses propres conteneurs, prêt en trois minutes.</p>
+      Le vôtre porte vos missions — un agent IA en ligne, rien qu'à vous,
+      accessible partout et prêt en trois minutes.</p>
       <div class="stats fade-up d4">
         <div><div class="n">&lt; 3 min</div><div class="muted">de la demande à l'agent en ligne</div></div>
-        <div><div class="n">2 conteneurs</div><div class="muted">agent + interface, isolés par client</div></div>
-        <div><div class="n">0 réglage</div><div class="muted">SSL, routage, logs : Coolify gère tout</div></div>
+        <div><div class="n">100 % à vous</div><div class="muted">privé, isolé, avec sa propre adresse</div></div>
+        <div><div class="n">0 réglage</div><div class="muted">hébergement et sécurité gérés pour vous</div></div>
       </div>
     </div>
     <div class="agent-visual fade-up d2">
@@ -507,12 +507,12 @@ $('h1').innerHTML = TITLE.split(' ').map((w, i) =>
 
 // Libellés français des étapes du moteur de provisioning (app/provisioning.py)
 const STEP_LABELS = {
-  deploy_service: 'Création du service Coolify (agent + interface)',
-  create_api_key: 'Création de la clé API dédiée (crédit du client)',
-  configure_env: "Configuration de l'environnement",
-  set_fqdn: 'Attribution du domaine sécurisé',
-  start_service: 'Démarrage des conteneurs',
-  health_check: 'Vérification de santé',
+  deploy_service: 'Mise en place de votre agent',
+  create_api_key: 'Activation de votre crédit IA dédié',
+  configure_env: 'Configuration de votre agent',
+  set_fqdn: 'Attribution de votre adresse sécurisée',
+  start_service: 'Démarrage de votre agent',
+  health_check: 'Vérification finale',
   done: 'Agent en ligne',
 };
 const STATUS_LABELS = { awaiting_payment: 'à payer', pending: 'en attente', deploying: 'déploiement', running: 'en ligne', failed: 'échec' };
@@ -846,6 +846,15 @@ function renderTenantCard(a, job, fz) {
           ${FINALIZE_STEPS.map((s, i) => `<li class="${i < fz.done ? 'done' : 'pending'}">${s}</li>`).join('')}
         </ul>
       </div>`;
+  } else if (a.status === 'running' && a.hosting && a.hosting.suspended) {
+    // Suspendu (hébergement impayé) : aucune action « active » possible —
+    // ni ouvrir, ni redémarrer, ni recharger — seulement régulariser/supprimer.
+    // (Le serveur bloque aussi ces actions ; l'UI ne doit pas les proposer.)
+    body = `
+      ${hostingHtml(a)}
+      <div class="row fade-up" style="margin-top:16px">
+        ${del}
+      </div>`;
   } else if (a.status === 'running') {
     const pwd = a.password || '';
     body = `
@@ -937,7 +946,7 @@ async function loadTenants() {
 }
 
 async function restartAgent(id) {
-  if (!confirm("Redémarrer les conteneurs de cet agent ?\n\nIl sera indisponible quelques secondes ; ses conversations sont conservées.")) return;
+  if (!confirm("Redémarrer votre agent ?\n\nIl sera indisponible quelques secondes ; ses conversations sont conservées.")) return;
   try {
     await api(`/api/agents/${id}/restart`, {method:'POST'});
     alert("Redémarrage lancé — l'agent revient dans une trentaine de secondes.");
@@ -962,8 +971,8 @@ async function topup(id, amount) {
 // Suppression : double garde-fou. 1) anti-fausse-manip. 2) rappel que c'est
 // irréversible, avec saisie du nom pour confirmer.
 async function destroy(id, name) {
-  if (!confirm(`Supprimer l'agent « ${name} » ?\n\nSes conteneurs Coolify seront arrêtés et détruits. Vérifiez que vous ne vous êtes pas trompé d'agent.`)) return;
-  const typed = prompt(`⚠️ DÉFINITIF ET NON REMBOURSABLE.\n\nCette suppression est irréversible : conteneurs, données et crédit restant seront perdus.\n\nPour confirmer, tapez le nom de l'agent : ${name}`);
+  if (!confirm(`Supprimer l'agent « ${name} » ?\n\nVotre agent sera arrêté et détruit. Vérifiez que vous ne vous êtes pas trompé d'agent.`)) return;
+  const typed = prompt(`⚠️ DÉFINITIF ET NON REMBOURSABLE.\n\nCette suppression est irréversible : votre agent, ses données et le crédit restant seront perdus.\n\nPour confirmer, tapez le nom de l'agent : ${name}`);
   if (typed === null) return;
   if (typed.trim() !== name) { alert('Le nom ne correspond pas — suppression annulée.'); return; }
   try {
@@ -1032,7 +1041,7 @@ const fleetSuspend = (id) => fleetAction(`/api/admin/agents/${id}/suspend`);
 const fleetRestore = (id) => fleetAction(`/api/admin/agents/${id}/restore`);
 const fleetExtend  = (id) => fleetAction(`/api/admin/agents/${id}/extend`, 'POST', JSON.stringify({months:1}));
 function fleetDelete(id, name) {
-  if (!confirm(`ADMIN — Supprimer définitivement l'agent « ${name} » (conteneurs + clé + données) ?`)) return;
+  if (!confirm(`ADMIN — Supprimer définitivement l'agent « ${name} » (agent + clé + données) ?`)) return;
   fleetAction(`/api/admin/agents/${id}`, 'DELETE');
 }
 async function enforceHosting() {

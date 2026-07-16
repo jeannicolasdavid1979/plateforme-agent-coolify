@@ -887,13 +887,22 @@ def restart_agent(agent_id: str, user: User = Depends(current_user), db: Session
     agent = db.get(Tenant, agent_id)
     if not agent or agent.user_id != user.id:
         raise HTTPException(404, "Agent non trouvé")
+    # Un agent suspendu (hébergement impayé) ne doit PAS pouvoir être relancé par
+    # le client via « Redémarrer » — sinon la suspension est contournée. Il faut
+    # d'abord régulariser (paiement) ou une restauration admin.
+    if agent.suspended_at is not None:
+        raise HTTPException(
+            402,
+            "Agent suspendu (hébergement impayé). Régularisez l'abonnement pour "
+            "le réactiver — le redémarrage est bloqué tant que l'hébergement n'est pas à jour.",
+        )
     if not agent.coolify_service_uuid:
-        raise HTTPException(409, "Cet agent n'a pas encore de service Coolify")
+        raise HTTPException(409, "Cet agent n'est pas encore prêt")
     client = get_client()
     if not client:
-        raise HTTPException(503, "Coolify API non configurée")
+        raise HTTPException(503, "Service d'hébergement momentanément indisponible")
     if not client.restart_service(agent.coolify_service_uuid):
-        raise HTTPException(502, "Redémarrage refusé par Coolify")
+        raise HTTPException(502, "Le redémarrage a échoué, réessayez dans un instant")
     return {"status": "restarting"}
 
 
@@ -1276,5 +1285,6 @@ def _agent_dict(a: Tenant, include_secrets: bool = False,
     }
     if include_secrets:
         d["password"] = a.instance_password
-        d["coolify_service_uuid"] = a.coolify_service_uuid
+        # NB : on n'expose PAS l'identifiant du service d'hébergement interne
+        # (secret métier) dans la réponse client.
     return d

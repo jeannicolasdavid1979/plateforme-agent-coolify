@@ -107,8 +107,8 @@ pour la confiance dans l'économie numérique (LCEN).</p>
   <tr><th>Adresse</th><td>{s.host_address}</td></tr>
   <tr><th>Contact</th><td>{s.host_contact}</td></tr>
 </table>
-<p>Les agents déployés via la plateforme sont hébergés sur cette même
-infrastructure (serveur dédié, orchestration Coolify).</p>
+<p>Les agents mis en ligne via la plateforme sont hébergés sur cette même
+infrastructure (serveur dédié).</p>
 
 <h2>Propriété intellectuelle</h2>
 <p>L'ensemble des éléments du site ({s.site_name}) — marque, textes, interface —
@@ -195,8 +195,8 @@ limitation, d'opposition et de portabilité (RGPD art. 15 à 22).</p>
 
 <h2>6. Sécurité</h2>
 <p>Mots de passe hachés (scrypt), accès par jeton signé, chiffrement TLS,
-isolation de chaque agent dans ses propres conteneurs, clé d'IA dédiée et
-plafonnée par client.</p>
+isolation de chaque agent dans son propre environnement dédié, clé d'IA dédiée
+et plafonnée par client.</p>
 
 <h2>7. Modifications</h2>
 <p>Cette politique peut évoluer ; la version en vigueur est datée en tête de page.</p>
@@ -256,7 +256,7 @@ dans le déploiement. Ensuite, deux formules au choix :</p>
 </ul>
 <p>À défaut de renouvellement à la date anniversaire (formule sans engagement) ou
 en cas d'échec de prélèvement (abonnement), l'agent est <strong>suspendu</strong>
-(conteneurs arrêtés, accès interrompu).{grace_txt} Les données sont alors
+(agent arrêté, accès interrompu).{grace_txt} Les données sont alors
 <strong>conservées {retention} jours</strong>, pendant lesquels le compte reste
 <strong>restaurable</strong> après régularisation (par vous via un paiement, ou par
 l'éditeur). Passé ce délai de {retention} jours de retard, l'agent et ses données

@@ -238,7 +238,7 @@ class ProvisioningEngine:
     def _step_deploy_service(self, tenant: Tenant, job: ProvisioningJob) -> str:
         client = get_client()
         if not client:
-            raise RuntimeError("Coolify API non configurée")
+            raise RuntimeError("Service d'hébergement non configuré")
 
         fqdn_url = f"https://{tenant.subdomain}.{self.settings.base_domain}"
         svc_name = f"hermes-{tenant.subdomain}"
@@ -258,18 +258,18 @@ class ProvisioningEngine:
             patched, _changes = customize_compose(template, fqdn_url)
             if patched:
                 svc_uuid = client.create_service_from_compose(svc_name, patched, urls=urls)
-                how = " (compose personnalisé + domaine transmis à la création)"
+                how = " (configuration personnalisée appliquée)"
 
         # Repli : création depuis le template, domaine transmis quand même
         if not svc_uuid:
             svc_uuid = client.create_service(svc_name, urls=urls)
-            how = " (template Coolify, domaine transmis à la création)"
+            how = ""
 
         tenant.coolify_service_uuid = svc_uuid
         tenant.instance_url = fqdn_url
         tenant.instance_password = client.get_password(svc_uuid)
         self.db.commit()
-        return f"service {svc_uuid[:12]} → {fqdn_url}{how}"
+        return f"agent configuré → {fqdn_url}{how}"
 
     def _step_create_api_key(self, tenant: Tenant, job: ProvisioningJob) -> str:
         """Une clé OpenRouter PAR AGENT, nommée et plafonnée au crédit payé —
@@ -324,20 +324,19 @@ class ProvisioningEngine:
         )
         if domains is None:
             details.append(
-                "PATCH urls refusé — Coolify trop ancien pour ce champ ? "
-                "(mettre l'instance à jour)"
+                "adresse à confirmer manuellement"
             )
         elif domains:
-            details.append("domaines retenus par Coolify : " + ", ".join(domains))
+            details.append("adresse attribuée : " + ", ".join(domains))
         else:
-            details.append(f"domaine {tenant.instance_url} attribué via l'API")
+            details.append(f"adresse {tenant.instance_url} attribuée")
 
         # Ceinture : le compose porte aussi le domaine (variables magiques)
         # et l'entrypoint config.yaml de l'agent.
         if compose and f"={tenant.instance_url}" not in compose:
             patched, changes = customize_compose(compose, tenant.instance_url)
             if patched and client.update_compose_raw(svc_uuid, patched):
-                details.append("compose adapté : " + " ; ".join(changes))
+                details.append("configuration adaptée")
         return " — ".join(details)
 
     def _step_start_service(self, tenant: Tenant, job: ProvisioningJob) -> str:
@@ -357,7 +356,7 @@ class ProvisioningEngine:
             status = client.wait_running(svc_uuid, timeout=120)
         if not status or "running" not in status:
             raise RuntimeError(
-                f"les conteneurs ne démarrent pas (statut Coolify : {status or 'inconnu'})"
+                f"votre agent ne démarre pas (statut : {status or 'inconnu'})"
             )
 
         # Vérité terrain : le domaine que Coolify a réellement retenu.
@@ -367,7 +366,7 @@ class ProvisioningEngine:
         want = tenant.instance_url.replace("https://", "")
         fqdns = client.service_fqdns(svc_uuid)
         if any(want in f for f in fqdns):
-            return f"conteneurs démarrés ({status}), domaine {want} appliqué"
+            return f"agent démarré ({status}), adresse {want} appliquée"
         effective = next((f.strip() for f in fqdns if f and f.strip()), None)
         if effective:
             effective = re.sub(r":\d+$", "", effective)  # :8787 = port interne Coolify
@@ -376,10 +375,9 @@ class ProvisioningEngine:
             tenant.instance_url = effective
             self.db.commit()
             return (
-                f"conteneurs démarrés ({status}) — domaine personnalisé non retenu "
-                f"par Coolify, adresse effective adoptée : {effective}"
+                f"agent démarré ({status}) — adresse effective adoptée : {effective}"
             )
-        return f"conteneurs démarrés ({status}), ATTENTION aucun domaine retenu"
+        return f"agent démarré ({status}), adresse en cours d'attribution"
 
     def _step_health_check(self, tenant: Tenant, job: ProvisioningJob) -> str:
         client = get_client()
@@ -406,10 +404,10 @@ class ProvisioningEngine:
         # publique converge encore.
         state = client.service_status(tenant.coolify_service_uuid)
         if state and "running" in state:
-            return f"conteneurs actifs ({state}) — l'URL publique converge (SSL)"
+            return f"agent actif ({state}) — adresse publique en cours de propagation (SSL)"
         raise RuntimeError(
-            "l'instance n'a pas répondu au health check"
-            + (f" (statut Coolify : {state})" if state else "")
+            "votre agent n'a pas répondu à la vérification finale"
+            + (f" (statut : {state})" if state else "")
         )
 
     def _step_done(self, tenant: Tenant, job: ProvisioningJob) -> str:
