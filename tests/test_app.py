@@ -116,6 +116,7 @@ def test_topup_credits_balance():
     resp = client.post("/api/agents", json={"name": "Topup", "subdomain": "test-topup"}, headers=headers)
     agent_id = resp.json()["agent"]["id"]
 
+    # Sans montant → recharge par défaut (10 €)
     resp = client.post(f"/api/agents/{agent_id}/topup", headers=headers)
     assert resp.status_code == 200
     checkout_id = resp.json()["checkout_url"].split("/pay/")[1]
@@ -127,15 +128,62 @@ def test_topup_credits_balance():
     assert resp.json()["balance_eur"] == 10.0
 
 
+def test_topup_with_chosen_amount():
+    """Le client choisit un montant parmi ceux proposés (5/10/20/50/100)."""
+    headers = _register("choose@example.com")
+    resp = client.post("/api/agents", json={"name": "Choix", "subdomain": "test-choose"}, headers=headers)
+    agent_id = resp.json()["agent"]["id"]
+
+    # Recharge de 50 € : le checkout et le crédit valent 50
+    resp = client.post(f"/api/agents/{agent_id}/topup", json={"amount_eur": 50}, headers=headers)
+    assert resp.status_code == 200
+    assert resp.json()["amount_eur"] == 50.0
+    checkout_id = resp.json()["checkout_url"].split("/pay/")[1]
+    assert client.post(f"/api/pay/{checkout_id}").json()["credited_eur"] == 50.0
+    assert client.get(f"/api/agents/{agent_id}", headers=headers).json()["balance_eur"] == 50.0
+
+    # Un montant hors liste est refusé (on ne crédite pas n'importe quoi)
+    resp = client.post(f"/api/agents/{agent_id}/topup", json={"amount_eur": 7}, headers=headers)
+    assert resp.status_code == 400
+    assert "invalide" in resp.json()["detail"]
+
+
+def test_admin_edits_topup_amounts():
+    """L'admin peut redéfinir la liste des montants de recharge proposés."""
+    from app.config import get_settings
+    get_settings().admin_emails = "amounts-admin@example.com"
+    client.post("/api/auth/register", json={"email": "amounts-admin@example.com", "password": "secret123", "accept_terms": True})
+    resp = client.post("/api/auth/login", json={"email": "amounts-admin@example.com", "password": "secret123"})
+    admin = {"Authorization": f"Bearer {resp.json()['token']}"}
+
+    resp = client.put("/api/admin/pricing", json={"topup_amounts_eur": "5, 15, 25"}, headers=admin)
+    assert resp.status_code == 200
+    assert resp.json()["topup_amounts_eur"] == [5.0, 15.0, 25.0]
+
+    # La nouvelle liste s'applique à la validation des recharges
+    resp = client.get("/api/pricing")
+    assert resp.json()["topup_amounts_eur"] == [5.0, 15.0, 25.0]
+
+    headers = _register("amounts-user@example.com")
+    resp = client.post("/api/agents", json={"name": "A", "subdomain": "test-amt"}, headers=headers)
+    agent_id = resp.json()["agent"]["id"]
+    # 25 est désormais autorisé, 20 ne l'est plus
+    assert client.post(f"/api/agents/{agent_id}/topup", json={"amount_eur": 25}, headers=headers).status_code == 200
+    assert client.post(f"/api/agents/{agent_id}/topup", json={"amount_eur": 20}, headers=headers).status_code == 400
+
+    # Une liste vide ou invalide est refusée
+    assert client.put("/api/admin/pricing", json={"topup_amounts_eur": "abc"}, headers=admin).status_code == 400
+
+
 def test_pricing_defaults_and_admin_update():
     # Lecture publique des prix (défauts de config)
     resp = client.get("/api/pricing")
     assert resp.status_code == 200
-    assert resp.json() == {
-        "deploy_price_eur": 29.0,
-        "topup_amount_eur": 10.0,
-        "initial_credit_eur": 5.0,
-    }
+    data = resp.json()
+    assert data["deploy_price_eur"] == 29.0
+    assert data["topup_amount_eur"] == 10.0
+    assert data["initial_credit_eur"] == 5.0
+    assert data["topup_amounts_eur"] == [5.0, 10.0, 20.0, 50.0, 100.0]
 
     # Un utilisateur normal ne peut pas modifier les prix
     headers = _register("pleb@example.com")

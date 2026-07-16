@@ -9,10 +9,23 @@ services:
       COOLIFY_ENVIRONMENT: ${COOLIFY_ENVIRONMENT:-production}
       COOLIFY_SERVER_UUID: ${COOLIFY_SERVER_UUID:-mggo8cg8kokwcgk48sw0o4c4}
       COOLIFY_DESTINATION_UUID: ${COOLIFY_DESTINATION_UUID:-xl2ufkvx4pjnjpj8hgsoq9wd}
+      # LLM — clé partagée (repli) + clé maître de provisioning (clés par agent)
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
-      ORCH_JWT_SECRET: ${ORCH_JWT_SECRET:-change-me}
-      ORCH_ADMIN_EMAILS: ${ORCH_ADMIN_EMAILS:-}
+      OPENROUTER_PROVISIONING_KEY: ${OPENROUTER_PROVISIONING_KEY:-}
+      EUR_USD_RATE: ${EUR_USD_RATE:-1.0}
+      # Noms alignés sur app/config.py (env_prefix vide) — sinon l'admin
+      # n'est jamais promu et le JWT reste sur sa valeur par défaut.
+      JWT_SECRET: ${JWT_SECRET:-change-me}
+      ADMIN_EMAILS: ${ADMIN_EMAILS:-}
       BASE_DOMAIN: ${BASE_DOMAIN:-kechlab.com}
+      # Mentions légales & RGPD — à renseigner avant production
+      LEGAL_PUBLISHER: ${LEGAL_PUBLISHER:-}
+      LEGAL_STATUS: ${LEGAL_STATUS:-}
+      LEGAL_SIRET: ${LEGAL_SIRET:-}
+      LEGAL_ADDRESS: ${LEGAL_ADDRESS:-}
+      LEGAL_DIRECTOR: ${LEGAL_DIRECTOR:-}
+      LEGAL_CONTACT_EMAIL: ${LEGAL_CONTACT_EMAIL:-contact@kechlab.com}
+      DPO_EMAIL: ${DPO_EMAIL:-privacy@kechlab.com}
     volumes:
       - orchestrator-data:/app/data
       - /var/run/docker.sock:/var/run/docker.sock

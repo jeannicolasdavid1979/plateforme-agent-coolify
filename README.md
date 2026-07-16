@@ -150,10 +150,37 @@ Configurées dans Coolify → Application → Environment :
 | `COOLIFY_ENVIRONMENT` | Environnement Coolify | `production` |
 | `COOLIFY_SERVER_UUID` | UUID du serveur | `mggo8cg8kokwcgk48sw0o4c4` |
 | `COOLIFY_DESTINATION_UUID` | UUID du réseau/destination | `xl2ufkvx4pjnjpj8hgsoq9wd` |
-| `OPENROUTER_API_KEY` | Clé OpenRouter partagée | `sk-or-v1-...` |
-| `ORCH_JWT_SECRET` | Secret pour les JWT | `HermesPlatformSecret2026!Kechlab` |
-| `ORCH_ADMIN_EMAILS` | Emails admin (séparés par virgules) | `david.jn@orange.fr` |
+| `OPENROUTER_API_KEY` | Clé OpenRouter partagée (repli) | `sk-or-v1-...` |
+| `OPENROUTER_PROVISIONING_KEY` | Clé maître de provisioning (crée les clés par agent) | `sk-or-v1-...` |
+| `EUR_USD_RATE` | Conversion crédit € → plafond $ OpenRouter | `1.0` |
+| `JWT_SECRET` | Secret pour les JWT | `HermesPlatformSecret2026!Kechlab` |
+| `ADMIN_EMAILS` | Emails admin (séparés par virgules) | `david.jn@orange.fr` |
 | `BASE_DOMAIN` | Domaine de base pour les agents | `kechlab.com` |
+| `LEGAL_*`, `DPO_EMAIL` | Coordonnées légales (voir section RGPD) | — |
+
+> ⚠️ **Noms de variables** : le code lit `JWT_SECRET` et `ADMIN_EMAILS`
+> (sans préfixe). Les anciennes `ORCH_JWT_SECRET` / `ORCH_ADMIN_EMAILS` ne sont
+> **plus** lues — si vous les utilisiez, l'admin n'était jamais promu. Le
+> `docker-compose.yml` a été corrigé en conséquence.
+
+### Accès administrateur
+
+1. Mettez votre email dans `ADMIN_EMAILS` (ex. `david.jn@orange.fr`), puis
+   redéployez la plateforme.
+2. Créez un compte avec **cet email exact**, ou connectez-vous s'il existe déjà.
+3. La promotion admin est appliquée **à la connexion** : déconnectez-vous puis
+   reconnectez-vous si le compte existait avant l'ajout à la liste.
+4. Une fois admin, la section **« Réglages business »** apparaît (prix de
+   déploiement, recharge par défaut, crédit offert, **liste des montants de
+   recharge**).
+
+### Persistance des données (profils, agents, crédits)
+
+La base SQLite vit dans `/app/data/orchestrator.db`, monté sur le **volume
+nommé** `orchestrator-data` (voir `docker-compose.yml`). Ce volume **survit aux
+redéploiements** : comptes, agents, soldes et preuves de consentement sont
+conservés. Les migrations au démarrage ne font qu'**ajouter des colonnes**
+(jamais de perte). Ne supprimez pas ce volume — c'est la seule copie des données.
 
 ## API Endpoints
 
@@ -169,7 +196,15 @@ Configurées dans Coolify → Application → Environment :
 | `POST` | `/api/agents` | Créer un agent (déploie via Coolify) |
 | `GET` | `/api/agents/{id}` | Détails d'un agent (URL, mot de passe) |
 | `GET` | `/api/agents/{id}/jobs` | Jobs de provisioning |
+| `POST` | `/api/agents/{id}/topup` | Recharger le crédit (montant au choix : 5/10/20/50/100 €) |
+| `POST` | `/api/agents/{id}/restart` | Redémarrer les conteneurs |
+| `DELETE` | `/api/agents/{id}` | Supprimer un agent |
+| `GET` | `/api/pricing` | Prix et montants de recharge proposés |
+| `GET` | `/api/account/export` | Exporter ses données (RGPD) |
+| `DELETE` | `/api/account` | Supprimer son compte (RGPD) |
+| `GET` | `/legal/*` | Pages légales (mentions, confidentialité, CGV, cookies) |
 | `GET` | `/api/admin/agents` | Lister tous les agents (admin) |
+| `PUT` | `/api/admin/pricing` | Modifier prix et montants de recharge (admin) |
 | `POST` | `/api/admin/agents/{id}/redeploy` | Redéployer un agent (admin) |
 
 ## Flow de déploiement d'un agent
@@ -254,10 +289,12 @@ Traefik route le trafic HTTPS automatiquement.
 ```bash
 curl -X POST https://plateformeagentcoolify.kechlab.com/api/auth/register \
   -H "Content-Type: application/json" \
-  -d '{"email":"david.jn@orange.fr","password":"FirstRoot2026"}'
+  -d '{"email":"david.jn@orange.fr","password":"FirstRoot2026","accept_terms":true}'
 ```
 
-L'email doit être dans `ORCH_ADMIN_EMAILS` pour avoir les droits admin.
+L'email doit être dans `ADMIN_EMAILS` pour avoir les droits admin ; la
+promotion est appliquée à la connexion (voir « Accès administrateur »).
+Le champ `accept_terms` est obligatoire (consentement RGPD).
 
 ## Modèles supportés (via OpenRouter)
 

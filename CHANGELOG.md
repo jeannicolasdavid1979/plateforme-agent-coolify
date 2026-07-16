@@ -3,6 +3,27 @@
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/).
 Les dates suivent l'ordre de développement.
 
+## [Non publié] — Recharges à montants multiples & correctifs d'exploitation
+
+### Ajouté
+- **Recharges à montants multiples** : le client choisit parmi 5 / 10 / 20 / 50 /
+  100 € (liste configurable, éditable par l'admin). Chaque euro rechargé relève
+  d'autant le plafond de la clé OpenRouter dédiée. Montant validé côté serveur
+  contre la liste proposée. Nouveau champ admin « Montants de recharge proposés ».
+
+### Corrigé
+- **Bug admin critique** : le `docker-compose.yml` passait `ORCH_JWT_SECRET` /
+  `ORCH_ADMIN_EMAILS`, alors que le code lit `JWT_SECRET` / `ADMIN_EMAILS`
+  (préfixe vide). Conséquence : l'admin n'était **jamais** promu et le JWT
+  restait sur sa valeur par défaut. Noms corrigés et alignés.
+- `docker-compose.yml` complété : `OPENROUTER_PROVISIONING_KEY`, `EUR_USD_RATE`,
+  coordonnées légales.
+
+### Documentation
+- README : sections « Accès administrateur » et « Persistance des données »
+  (le volume nommé `orchestrator-data` conserve profils, agents et crédits au
+  fil des redéploiements).
+
 ## [Non publié] — Conformité RGPD & légale
 
 ### Ajouté

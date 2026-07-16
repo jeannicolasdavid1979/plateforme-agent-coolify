@@ -38,8 +38,11 @@ class Settings(BaseSettings):
 
     # Business — valeurs par défaut, modifiables par l'admin (table settings)
     deploy_price_eur: float = 29.0
-    topup_amount_eur: float = 10.0
+    topup_amount_eur: float = 10.0  # montant proposé par défaut
     initial_credit_eur: float = 5.0
+    # Montants de recharge proposés au client (liste, en euros). Chaque euro
+    # rechargé relève d'autant le plafond de la clé OpenRouter dédiée.
+    topup_amounts_eur: str = "5,10,20,50,100"
 
     # ── Mentions légales & RGPD ───────────────────────────────────────
     # À RENSEIGNER avant la mise en production (via variables d'environnement

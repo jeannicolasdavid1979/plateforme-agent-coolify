@@ -163,6 +163,16 @@
   button.ghost.danger { color:var(--bad); border-color:rgba(224,92,92,.4); }
   button.ghost.danger:hover { background:rgba(224,92,92,.12); }
 
+  /* Recharge : montants proposés en pastilles */
+  .topup { margin-top:14px; padding-top:14px; border-top:1px solid var(--line); }
+  .topup .muted { display:block; margin-bottom:8px; }
+  .topup-amounts { display:flex; flex-wrap:wrap; gap:8px; }
+  button.chip { padding:7px 14px; font-size:13px; font-weight:600;
+                background:var(--surface); color:var(--text);
+                border:1px solid var(--line); border-radius:999px; }
+  button.chip:hover { border-color:var(--accent); color:var(--accent);
+                      box-shadow:0 6px 18px rgba(0,0,0,.3); }
+
   /* Pied de page légal */
   .site-footer { max-width:1120px; margin:80px auto 0; padding:28px 32px 48px;
                  border-top:1px solid var(--line); display:flex; flex-wrap:wrap;
@@ -269,12 +279,16 @@
         <input id="p-deploy" type="number" min="0" step="0.5">
       </div>
       <div class="card">
-        <div class="muted">Montant d'une recharge (€)</div>
+        <div class="muted">Recharge par défaut (€)</div>
         <input id="p-topup" type="number" min="0" step="0.5">
       </div>
       <div class="card">
         <div class="muted">Crédit IA offert au lancement (€)</div>
         <input id="p-credit" type="number" min="0" step="0.5">
+      </div>
+      <div class="card">
+        <div class="muted">Montants de recharge proposés (séparés par des virgules)</div>
+        <input id="p-amounts" type="text" placeholder="5,10,20,50,100">
       </div>
     </div>
     <div class="row" style="margin-top:16px">
@@ -347,7 +361,7 @@ const STEP_LABELS = {
   done: 'Agent en ligne',
 };
 const STATUS_LABELS = { awaiting_payment: 'à payer', pending: 'en attente', deploying: 'déploiement', running: 'en ligne', failed: 'échec' };
-let pricing = { deploy_price_eur: 0, topup_amount_eur: 0, initial_credit_eur: 0 };
+let pricing = { deploy_price_eur: 0, topup_amount_eur: 0, initial_credit_eur: 0, topup_amounts_eur: [] };
 const eur = (n) => Number(n || 0).toFixed(2).replace('.', ',');
 
 function errorMessage(detail, fallback) {
@@ -415,6 +429,8 @@ async function loadPricing() {
     $('p-deploy').value = pricing.deploy_price_eur;
     $('p-topup').value = pricing.topup_amount_eur;
     $('p-credit').value = pricing.initial_credit_eur;
+    // Nombres bruts (point décimal) : les virgules servent de séparateurs
+    if ($('p-amounts')) $('p-amounts').value = (pricing.topup_amounts_eur || []).join(', ');
   } catch (e) { /* valeurs par défaut serveur */ }
 }
 
@@ -425,6 +441,7 @@ async function savePricing() {
       deploy_price_eur: parseFloat($('p-deploy').value),
       topup_amount_eur: parseFloat($('p-topup').value),
       initial_credit_eur: parseFloat($('p-credit').value),
+      topup_amounts_eur: $('p-amounts').value.replace(/\s|€/g, ''),
     })});
     $('pricing-msg').textContent = '✔ Réglages enregistrés';
     loadPricing(); renderCachedTenants();
@@ -528,8 +545,14 @@ function renderTenantCard(a, job, fz) {
       <div class="row fade-up" style="margin-top:16px">
         <button onclick="window.open('${a.url}', '_blank')">Ouvrir mon agent</button>
         <button class="ghost" onclick="restartAgent('${a.id}')">Redémarrer</button>
-        <button class="ghost" onclick="topup('${a.id}')">Recharger ${eur(pricing.topup_amount_eur)} €</button>
         ${del}
+      </div>
+      <div class="topup fade-up">
+        <span class="muted">Recharger le crédit IA</span>
+        <div class="topup-amounts">
+          ${(pricing.topup_amounts_eur || []).map(m =>
+            `<button class="chip" onclick="topup('${a.id}', ${m})">${eur(m)} €</button>`).join('')}
+        </div>
       </div>`;
   } else if (a.status === 'awaiting_payment') {
     body = `
@@ -605,9 +628,10 @@ async function payNow(id) {
   } catch (e) { alert(e.message); }
 }
 
-async function topup(id) {
+async function topup(id, amount) {
   try {
-    const data = await api(`/api/agents/${id}/topup`, {method:'POST'});
+    const body = amount != null ? JSON.stringify({amount_eur: amount}) : undefined;
+    const data = await api(`/api/agents/${id}/topup`, {method:'POST', body});
     location.href = data.checkout_url;
   } catch (e) { alert(e.message); }
 }

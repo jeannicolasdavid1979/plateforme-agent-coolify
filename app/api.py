@@ -44,6 +44,11 @@ class PricingUpdate(BaseModel):
     deploy_price_eur: float | None = None
     topup_amount_eur: float | None = None
     initial_credit_eur: float | None = None
+    topup_amounts_eur: str | None = None  # liste "5,10,20,50,100"
+
+
+class TopupRequest(BaseModel):
+    amount_eur: float | None = None  # None → montant par défaut
 
 
 # ── Pricing (variables business) ─────────────────────────────────────
@@ -63,9 +68,35 @@ def get_pricing(db: Session) -> dict[str, float]:
     return pricing
 
 
+TOPUP_AMOUNTS_KEY = "topup_amounts_eur"
+
+
+def get_topup_amounts(db: Session) -> list[float]:
+    """Montants de recharge proposés (config, surchargée par la table settings).
+    Toujours trié, dédoublonné, positif — repli sur le montant par défaut."""
+    raw = get_settings().topup_amounts_eur
+    row = db.get(Setting, TOPUP_AMOUNTS_KEY)
+    if row and row.value.strip():
+        raw = row.value
+    amounts: set[float] = set()
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            v = round(float(part), 2)
+            if v > 0:
+                amounts.add(v)
+        except ValueError:
+            pass
+    return sorted(amounts) or [float(get_pricing(db)["topup_amount_eur"])]
+
+
 @router.get("/api/pricing")
 def pricing(db: Session = Depends(get_db)):
-    return get_pricing(db)
+    p = get_pricing(db)
+    p["topup_amounts_eur"] = get_topup_amounts(db)
+    return p
 
 
 def _now_iso() -> str:
@@ -88,16 +119,39 @@ def update_pricing(
     updates = {k: v for k, v in body.model_dump().items() if v is not None}
     if not updates:
         raise HTTPException(400, "Aucune valeur à mettre à jour")
+
+    # La liste des montants de recharge est une chaîne "5,10,20,…" : on la
+    # valide (au moins un montant positif) et on la stocke telle quelle.
+    amounts_raw = updates.pop(TOPUP_AMOUNTS_KEY, None)
+    if amounts_raw is not None:
+        parsed = [p.strip() for p in str(amounts_raw).split(",") if p.strip()]
+        valid = []
+        for p in parsed:
+            try:
+                if float(p) > 0:
+                    valid.append(str(round(float(p), 2)).rstrip("0").rstrip("."))
+            except ValueError:
+                raise HTTPException(400, f"Montant invalide dans la liste : « {p} »")
+        if not valid:
+            raise HTTPException(400, "La liste des montants doit contenir au moins un montant positif")
+        _upsert_setting(db, TOPUP_AMOUNTS_KEY, ",".join(valid))
+
     for key, value in updates.items():
         if value < 0:
             raise HTTPException(400, f"{key} doit être positif ou nul")
-        row = db.get(Setting, key)
-        if row:
-            row.value = str(value)
-        else:
-            db.add(Setting(key=key, value=str(value)))
+        _upsert_setting(db, key, str(value))
     db.commit()
-    return get_pricing(db)
+    result = get_pricing(db)
+    result["topup_amounts_eur"] = get_topup_amounts(db)
+    return result
+
+
+def _upsert_setting(db: Session, key: str, value: str) -> None:
+    row = db.get(Setting, key)
+    if row:
+        row.value = value
+    else:
+        db.add(Setting(key=key, value=value))
 
 
 # ── Auth ─────────────────────────────────────────────────────────────
@@ -268,19 +322,33 @@ def get_or_create_deploy_checkout(
 
 @router.post("/api/agents/{agent_id}/topup")
 def create_topup_checkout(
-    agent_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)
+    agent_id: str,
+    body: TopupRequest | None = None,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
 ):
     agent = db.get(Tenant, agent_id)
     if not agent or agent.user_id != user.id:
         raise HTTPException(404, "Agent non trouvé")
-    p = get_pricing(db)
+
+    allowed = get_topup_amounts(db)
+    # Montant choisi par le client, validé contre la liste proposée (on ne
+    # crédite pas un montant arbitraire). Sans choix : le montant par défaut.
+    amount = body.amount_eur if body and body.amount_eur is not None else get_pricing(db)["topup_amount_eur"]
+    amount = round(float(amount), 2)
+    if amount not in allowed:
+        raise HTTPException(
+            400,
+            "Montant de recharge invalide. Montants proposés : "
+            + ", ".join(f"{a:.0f} €" for a in allowed),
+        )
     checkout = Checkout(
         user_id=user.id, tenant_id=agent_id, kind="topup",
-        amount_eur=p["topup_amount_eur"], credit_eur=p["topup_amount_eur"],
+        amount_eur=amount, credit_eur=amount,
     )
     db.add(checkout)
     db.commit()
-    return {"checkout_url": f"/pay/{checkout.id}"}
+    return {"checkout_url": f"/pay/{checkout.id}", "amount_eur": amount}
 
 
 @router.post("/api/pay/{checkout_id}")
