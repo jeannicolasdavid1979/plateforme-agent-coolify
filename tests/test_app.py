@@ -394,3 +394,46 @@ def test_topup_increases_openrouter_key_cap(monkeypatch):
     assert tenant.balance_eur == 20.0
 
     db.close()
+
+
+def test_topup_handles_openrouter_failure_gracefully(monkeypatch, caplog):
+    """Si OpenRouter API échoue, le crédit local est crédité quand même."""
+    from app import api
+    from app.db import SessionFactory
+    from app.models import Tenant, User
+
+    class FailingKeys:
+        def add_credit(self, key_hash, amount_usd):
+            raise RuntimeError("OpenRouter API temporairement indisponible")
+
+    monkeypatch.setattr(api, "get_keys_client", lambda: FailingKeys())
+
+    db = SessionFactory()
+    user = User(email="topup-fail@y.z", password_hash="h")
+    db.add(user); db.commit()
+    tenant = Tenant(
+        user_id=user.id, name="TopupFail", subdomain="test-topup-fail",
+        status="running", balance_eur=5.0,
+        openrouter_key_hash="hash123"
+    )
+    db.add(tenant); db.commit()
+
+    checkout = Checkout(
+        user_id=user.id, tenant_id=tenant.id, kind="topup",
+        amount_eur=10.0, credit_eur=10.0, status="pending"
+    )
+    db.add(checkout); db.commit()
+
+    resp = client.post(f"/api/pay/{checkout.id}")
+    # Le paiement réussit même si OpenRouter échoue
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "paid"
+
+    # Le crédit est crédité localement
+    db.refresh(tenant)
+    assert tenant.balance_eur == 15.0
+
+    # Un avertissement est enregistré
+    assert any("Recharge OpenRouter échouée" in record.message for record in caplog.records)
+
+    db.close()
