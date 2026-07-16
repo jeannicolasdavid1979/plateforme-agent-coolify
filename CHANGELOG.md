@@ -5,6 +5,16 @@ Les dates suivent l'ordre de développement.
 
 ## [Non publié] — Frais de service, admin robuste & persistance
 
+### Corrigé (démarrage)
+- **Boucle de crash au démarrage** (`FileExistsError: './data'`) quand `/app/data`
+  était monté comme un **fichier** (mauvaise config Coolify : `File Mount` au
+  lieu d'un `Volume`) : `os.makedirs(exist_ok=True)` levait car la cible n'est
+  pas un dossier. `db.py` détecte désormais ce cas, **démarre quand même** en
+  repli éphémère (`/tmp`, persistance désactivée + erreur loggée) et gère aussi
+  `FileExistsError`/`OSError`. `Dockerfile` : `DATABASE_URL` absolu par défaut
+  (`sqlite:////app/data/orchestrator.db`) et `mkdir -p /app/data`, valable même
+  en déploiement Dockerfile (où le compose n'est pas lu).
+
 ### Ajouté
 - **Frais de service sur les recharges** (`SERVICE_FEE_RATE`, 10 % par défaut,
   éditable par l'admin de 0 à 100 %) pour financer l'exploitation. Transparent

@@ -1,6 +1,7 @@
 """Database session management."""
 from __future__ import annotations
 
+import logging
 import os
 
 from sqlalchemy import create_engine, text
@@ -8,15 +9,46 @@ from sqlalchemy.orm import sessionmaker
 
 from .models import Base
 
+_log = logging.getLogger("db")
+_FALLBACK_DB = "/tmp/orchestrator.db"  # repli éphémère si le dossier de données est inutilisable
+
+
+def _resolve_sqlite_path(db_url: str) -> str:
+    """Chemin du fichier depuis une URL sqlite (3 slashes = relatif, 4 = absolu)."""
+    return db_url.replace("sqlite:///", "")
+
 
 def _get_engine():
     db_url = os.environ.get("DATABASE_URL", "sqlite:///./data/orchestrator.db")
-    # For SQLite, ensure the directory exists
     if "sqlite:///" in db_url and ":memory:" not in db_url:
-        db_path = db_url.replace("sqlite:///", "")
+        db_path = _resolve_sqlite_path(db_url)
         db_dir = os.path.dirname(db_path)
         if db_dir:
-            os.makedirs(db_dir, exist_ok=True)
+            # Cas fatal historique : /app/data monté comme un FICHIER (mauvaise
+            # config de stockage Coolify) fait lever FileExistsError à makedirs
+            # et boucle le conteneur. On ne crashe plus : on bascule sur un
+            # emplacement de repli en signalant fortement le problème.
+            if os.path.exists(db_dir) and not os.path.isdir(db_dir):
+                _log.error(
+                    "Le dossier de données %r existe mais n'est PAS un dossier "
+                    "(montage fichier ?). Persistance DÉSACTIVÉE — repli sur %s. "
+                    "Configurez un VOLUME (type dossier) monté sur %r dans Coolify.",
+                    db_dir, _FALLBACK_DB, db_dir,
+                )
+                db_url = "sqlite:///" + _FALLBACK_DB
+            else:
+                try:
+                    os.makedirs(db_dir, exist_ok=True)
+                except FileExistsError:
+                    # Déjà présent sous une autre forme (montage, lien vers
+                    # dossier) : rien à créer, SQLite ouvrira la base.
+                    pass
+                except OSError as exc:
+                    _log.error(
+                        "Création de %r impossible (%s) — repli sur %s.",
+                        db_dir, exc, _FALLBACK_DB,
+                    )
+                    db_url = "sqlite:///" + _FALLBACK_DB
     connect_args = {"check_same_thread": False} if "sqlite" in db_url else {}
     return create_engine(db_url, connect_args=connect_args, echo=False)
 

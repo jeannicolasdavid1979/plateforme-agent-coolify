@@ -203,8 +203,14 @@ colonnes** (jamais de perte).
 > 1. **Déployer en tant que « Docker Compose »** dans Coolify (type de ressource
 >    qui lit ce `docker-compose.yml`, volume `orchestrator-data` inclus) ; **ou**
 > 2. Sur l'application existante : **Coolify → l'app → Persistent Storage →
->    Add → chemin `/app/data`**. Le montage rend la base persistante sans
->    changer le type de déploiement.
+>    Add → type `Volume` (un DOSSIER) → Mount Path `/app/data`**.
+>
+> ⛔️ **Piège rencontré** : si vous ajoutez un **`File Mount`** (fichier) sur
+> `/app/data` au lieu d'un **`Volume`** (dossier), `/app/data` devient un fichier
+> et l'app plantait au démarrage (`FileExistsError: './data'`). Depuis, l'app ne
+> boucle plus : elle **démarre quand même** en repli éphémère (persistance
+> désactivée, erreur loggée). Pour retrouver la persistance, **supprimez le File
+> Mount** et ajoutez un **Volume** (dossier) sur `/app/data`.
 >
 > Après correction, refaites votre compte admin une dernière fois : il sera
 > ensuite conservé d'un déploiement à l'autre. Ne supprimez jamais ce volume —

@@ -25,6 +25,30 @@ def test_health():
     assert resp.json()["status"] == "ok"
 
 
+def test_engine_survives_non_directory_data_path(tmp_path, monkeypatch):
+    """Si le dossier de données est en fait un FICHIER (mauvais montage Coolify),
+    le démarrage ne doit PAS boucler : repli sur une base éphémère."""
+    from app import db as dbmod
+
+    # data_path/ « data » est un fichier — makedirs lèverait FileExistsError
+    fake_dir = tmp_path / "data"
+    fake_dir.write_text("not a directory")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{fake_dir}/orchestrator.db")
+    # Ne lève pas, et l'engine pointe sur le repli éphémère
+    engine = dbmod._get_engine()
+    assert engine.url.database == dbmod._FALLBACK_DB
+
+
+def test_engine_creates_missing_data_directory(tmp_path, monkeypatch):
+    """Cas nominal : le dossier de données est créé s'il manque."""
+    from app import db as dbmod
+
+    target = tmp_path / "sub" / "data"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{target}/orchestrator.db")
+    dbmod._get_engine()
+    assert target.is_dir()
+
+
 def test_register_and_login():
     # Register
     resp = client.post("/api/auth/register", json={"email": "test@example.com", "password": "secret123", "accept_terms": True})
