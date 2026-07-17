@@ -3,6 +3,27 @@
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/).
 Les dates suivent l'ordre de développement.
 
+## [Non publié — branche de test] — Le Laboratoire : expérience narrative
+
+### Ajouté
+- **Le laboratoire d'alchimie numérique** : la page n'est plus une landing —
+  c'est une scène fixe plein écran (image maître générée depuis le portrait
+  d'Hermes, identité préservée : caducée, casque ailé, visière cyan) où Hermes
+  est suspendu à ses câbles au milieu des alambics. Le texte vient à la scène
+  (panneaux + scroll-snap), l'identification se fait sur un « terminal du
+  laboratoire » (console scanlines).
+- **Machine à états `Lab`** pilotée par les actions réelles de l'utilisateur :
+  focus email/mot de passe → impulsions d'énergie cyan ; création du compte →
+  impulsion or ; connexion → laboratoire « chargé » (plus lumineux) ; survol
+  de Payer/Déployer → Hermès **tressaille** ; paiement/déploiement → **injection
+  de data** (double flash or) ; agent en ligne → bascule sur la boucle « vie »
+  (visière éclatante, tête qui scrute, particule lumineuse parcourant le torse,
+  câbles relâchés). Au retour d'un créateur dont l'agent tourne, Hermès est
+  **déjà éveillé**.
+- **Deux boucles vidéo** générées depuis le même plan maître (sommeil / vie),
+  WebM VP9 + MP4 H.264, ~1,2 Mo au total, fondus de 2 s ; repli image fixe
+  (`lab.webp`, 73 Ko) si réseau lent ou `prefers-reduced-motion`.
+
 ## [Non publié — branche de test] — Hermes animé, diagnostic Stripe, parcours d'accueil
 
 ### Ajouté

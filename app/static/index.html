@@ -147,24 +147,61 @@
   .stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:16px; margin-top:56px; }
   .stats .n { font-size:28px; font-weight:600; letter-spacing:-0.02em; }
   @keyframes floatSlow { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-12px)} }
-  .agent-visual { position:relative; justify-self:end; width:100%; max-width:420px;
-                  animation:floatSlow 9s ease-in-out infinite; }
-  .agent-visual img, .agent-visual video {
-                      width:100%; max-height:620px; object-fit:cover; display:block;
-                      filter:brightness(.88) contrast(1.04);
-                      -webkit-mask-image:radial-gradient(95% 85% at 50% 42%, #000 40%, transparent 76%);
-                      mask-image:radial-gradient(95% 85% at 50% 42%, #000 40%, transparent 76%); }
-  /* Hermes animé : la vidéo (générée depuis la MÊME image, même cadrage) fond
-     en douceur par-dessus le portrait — continuité graphique totale, et repli
-     silencieux sur l'image si la vidéo manque ou si le réseau est lent. */
-  .agent-visual video { position:absolute; inset:0; height:100%;
-                        opacity:0; transition:opacity 1.6s ease; }
-  .agent-visual video.on { opacity:1; }
-  .agent-visual::after { content:""; position:absolute; inset:auto 10% -8% 10%; height:24px;
-                         background:radial-gradient(50% 100% at 50% 50%, rgba(224,164,88,.14), transparent 70%);
-                         filter:blur(6px); }
-  @media (max-width:860px){ .hero{grid-template-columns:1fr} .agent-visual{max-width:300px; justify-self:center} }
-  @media (prefers-reduced-motion:reduce){ .agent-visual{animation:none} }
+  /* ══ LA SCÈNE — laboratoire fixe plein écran, derrière tout ══ */
+  #lab-scene { position:fixed; inset:0; z-index:-2; background:#050507; overflow:hidden; }
+  #lab-scene img, #lab-scene video { position:absolute; inset:0; width:100%; height:100%;
+                                     object-fit:cover; object-position:60% center; }
+  .scene-v { opacity:0; transition:opacity 2s ease; }
+  .scene-v.on { opacity:1; }
+  /* Voile de lisibilité : sombre à gauche (colonne de texte) + vignette bas.
+     Plus dense une fois connecté (les cartes fonctionnelles priment). */
+  #scene-veil { position:absolute; inset:0; pointer-events:none;
+    background:linear-gradient(90deg, rgba(5,5,7,.86) 0%, rgba(5,5,7,.55) 42%, rgba(5,5,7,.12) 70%, rgba(5,5,7,.35) 100%),
+               linear-gradient(180deg, rgba(5,5,7,.55) 0%, transparent 22%, transparent 70%, rgba(5,5,7,.75) 100%);
+    transition:background 1s ease, opacity 1s ease; }
+  body[data-guest="0"] #scene-veil { background:rgba(5,5,7,.84); }
+  /* Onde d'énergie : flash radial déclenché par la machine à états */
+  #scene-surge { position:absolute; inset:0; pointer-events:none; opacity:0;
+    background:radial-gradient(60% 80% at 62% 45%, var(--surge-color, rgba(120,220,255,.28)), transparent 70%); }
+  #scene-surge.pulse { animation:surge var(--surge-dur, 900ms) ease-out; }
+  @keyframes surge { 0% { opacity:0 } 18% { opacity:1 } 100% { opacity:0 } }
+  /* Tressaillement d'Hermès (survol Payer/Déployer) */
+  #lab-scene.shudder { animation:shudder .45s ease; }
+  @keyframes shudder { 0%,100% { transform:none } 20% { transform:translate(1px,-2px) }
+    40% { transform:translate(-2px,1px) } 60% { transform:translate(2px,1px) } 80% { transform:translate(-1px,-1px) } }
+  /* Chargé (opérateur identifié) : le laboratoire s'éclaire un peu */
+  body.lab-charged #lab-scene img, body.lab-charged #lab-scene video { filter:brightness(1.07) saturate(1.06); }
+
+  /* ══ PANNEAUX — le texte vient à la scène, la scène ne bouge pas ══ */
+  body[data-guest="1"] main { scroll-snap-type:y proximity; }
+  .panel { min-height:92vh; display:grid; align-items:center; scroll-snap-align:start;
+           padding:48px 0; }
+  main section { scroll-margin-top:84px; }  /* le header ne recouvre pas les titres */
+  .panel-inner { max-width:560px; }
+  .panel.hero .panel-inner { max-width:640px; }
+  .scroll-hint { color:var(--muted); font-size:13px; letter-spacing:.2em; text-transform:uppercase;
+                 animation:hintFloat 2.6s ease-in-out infinite; }
+  @keyframes hintFloat { 0%,100% { transform:translateY(0); opacity:.7 } 50% { transform:translateY(6px); opacity:1 } }
+
+  /* ══ CONSOLE — l'écran d'ordinateur du laboratoire ══ */
+  .console { background:rgba(8,10,12,.72); border:1px solid rgba(140,180,190,.22);
+             border-radius:14px; padding:26px 28px 30px;
+             box-shadow:0 30px 80px rgba(0,0,0,.55), inset 0 0 0 1px rgba(0,0,0,.4),
+                        inset 0 0 60px rgba(90,200,220,.04);
+             backdrop-filter:blur(10px); position:relative; overflow:hidden; }
+  .console::after { content:""; position:absolute; inset:0; pointer-events:none; opacity:.5;
+    background:repeating-linear-gradient(180deg, rgba(255,255,255,.025) 0 1px, transparent 1px 3px); }
+  .console-head { font-size:11px; letter-spacing:.22em; color:#7fb7c2; text-transform:uppercase;
+                  display:flex; align-items:center; gap:8px;
+                  border-bottom:1px solid rgba(140,180,190,.18); padding-bottom:10px; }
+  .console-dot { width:8px; height:8px; border-radius:50%; background:#57d9c2;
+                 box-shadow:0 0 10px #57d9c2; animation:dotBreath 3.5s ease-in-out infinite; }
+  @keyframes dotBreath { 0%,100% { opacity:.5 } 50% { opacity:1 } }
+
+  @media (max-width:860px){ .hero{grid-template-columns:1fr}
+    #lab-scene img, #lab-scene video { object-position:68% center; }
+    .panel { min-height:86vh; } }
+  @media (prefers-reduced-motion:reduce){ .scroll-hint, .console-dot { animation:none } }
 
   /* Bouton d'action douce mais destructrice (supprimer le compte) */
   button.ghost.danger { color:var(--bad); border-color:rgba(224,92,92,.4); }
@@ -262,7 +299,20 @@
   @media (max-width:560px){ .cookie-note{flex-direction:column; align-items:stretch} }
 </style>
 </head>
-<body>
+<body data-guest="1">
+<!-- ══ LA SCÈNE ══ Le laboratoire d'alchimie numérique, fixe derrière tout.
+     La page ne « défile » pas : c'est le texte qui vient à la scène. Trois
+     couches : image (peinture instantanée), vidéo sommeil, vidéo vie —
+     chacune fond sur la précédente. Les interactions déclenchent des ondes
+     d'énergie (surge) et des tressaillements (shudder) via la machine à
+     états Lab. Repli : image fixe seule (réseau lent, reduced-motion). -->
+<div id="lab-scene" aria-hidden="true">
+  <img id="scene-img" src="/static/lab.webp" alt="">
+  <video id="scene-dormant" class="scene-v" muted loop playsinline preload="auto"></video>
+  <video id="scene-alive" class="scene-v" muted loop playsinline preload="none"></video>
+  <div id="scene-surge"></div>
+  <div id="scene-veil"></div>
+</div>
 <header>
   <div class="brand">HER<span>MES</span></div>
   <div class="row">
@@ -272,30 +322,39 @@
 </header>
 <main>
 
-  <!-- Section : Hero (cinematic, reveal-word, portrait d'agent fourni) -->
-  <section id="hero" class="hero">
-    <div>
-      <div class="eyebrow fade-up">Votre agent IA personnel, en ligne</div>
+  <!-- ACTE I — Le Sommeil : la scène parle, le texte vient à elle -->
+  <section id="hero" class="panel hero">
+    <div class="panel-inner">
+      <div class="eyebrow fade-up">Laboratoire d'alchimie numérique</div>
       <h1 id="h1"></h1>
-      <p class="lead fade-up d3">Hermès portait les messages des dieux.
-      Le vôtre porte vos missions — un agent IA en ligne, rien qu'à vous,
-      accessible partout et prêt en trois minutes.</p>
-      <div class="stats fade-up d4">
-        <div><div class="n">&lt; 3 min</div><div class="muted">de la demande à l'agent en ligne</div></div>
-        <div><div class="n">100 % à vous</div><div class="muted">privé, isolé, avec sa propre adresse</div></div>
-        <div><div class="n">0 réglage</div><div class="muted">hébergement et sécurité gérés pour vous</div></div>
-      </div>
-    </div>
-    <div class="agent-visual fade-up d2">
-      <img src="/static/agent.webp" alt="Agent Hermes" width="900" height="1200">
-      <video id="agent-video" muted loop playsinline preload="auto" aria-hidden="true"></video>
+      <p class="lead fade-up d3">Il est là, suspendu à ses câbles.
+      Hermès portait les messages des dieux — le vôtre attend que
+      quelqu'un lui donne une mission. Et une étincelle.</p>
+      <div class="scroll-hint fade-up d4">▾ approchez</div>
     </div>
   </section>
 
-  <!-- Section : Connexion (glass-medium) -->
-  <section id="auth" class="card glass-m fade-up d2" style="max-width:420px">
-    <h2>Créez votre compte</h2>
-    <p class="muted" style="margin-top:-4px;font-size:14px">Votre agent IA personnel vous attend — deux minutes suffisent.</p>
+  <!-- ACTE II — La Présence : le laboratoire sent l'opérateur -->
+  <section id="ritual" class="panel">
+    <div class="panel-inner console">
+      <div class="console-head"><span class="console-dot"></span> TERMINAL DU LABORATOIRE — journal</div>
+      <p class="lead" style="margin-top:14px">Un opérateur est détecté.
+      Le laboratoire est prêt depuis longtemps ; il ne manque que vous.</p>
+      <div class="stats" style="margin-top:20px">
+        <div><div class="n">&lt; 3 min</div><div class="muted">du rituel à l'agent en ligne</div></div>
+        <div><div class="n">100 % à vous</div><div class="muted">privé, isolé, sa propre adresse</div></div>
+        <div><div class="n">0 réglage</div><div class="muted">hébergement et sécurité gérés</div></div>
+      </div>
+      <div class="scroll-hint" style="margin-top:24px">▾ s'identifier</div>
+    </div>
+  </section>
+
+  <!-- ACTE III — L'Identification : chaque champ envoie une impulsion -->
+  <section id="auth" class="panel">
+   <div class="panel-inner console" style="max-width:430px">
+    <div class="console-head"><span class="console-dot"></span> IDENTIFICATION DE L'OPÉRATEUR</div>
+    <h2 style="margin-top:14px">Créez votre compte</h2>
+    <p class="muted" style="margin-top:-4px;font-size:14px">Chaque champ rempli envoie une impulsion au laboratoire.</p>
     <input id="email" type="email" placeholder="email@exemple.com" autocomplete="email">
     <input id="password" type="password" placeholder="mot de passe (8+ caractères)" autocomplete="current-password">
     <label class="consent" style="display:flex;gap:9px;align-items:flex-start;margin-top:12px;font-size:13px;color:var(--muted);cursor:pointer">
@@ -319,6 +378,7 @@
         <span id="forgot-msg" class="muted"></span>
       </div>
     </div>
+   </div>
   </section>
 
   <!-- Bandeau : vérification d'e-mail -->
@@ -512,7 +572,7 @@ let isAdmin = false;
 let pollTimer = null;
 
 // Reveal-word du titre hero (preset reveal-word, 60ms d'écart)
-const TITLE = 'Votre agent IA personnel.';
+const TITLE = 'Donnez la vie à votre agent.';
 $('h1').innerHTML = TITLE.split(' ').map((w, i) =>
   `<span class="w" style="animation-delay:${i * 60}ms">${w}&nbsp;</span>`).join('');
 
@@ -561,6 +621,7 @@ async function register() {
     $('msg').textContent = "Cochez la case pour accepter les CGV et la politique de confidentialité.";
     return;
   }
+  Lab.surge(3);  // troisième impulsion : le laboratoire s'active réellement
   await authCall('/api/auth/register', {accept_terms: true});
 }
 async function login() { await authCall('/api/auth/login'); }
@@ -943,6 +1004,7 @@ function renderCachedTenants() {
 async function loadTenants() {
   try { tenantsCache = (await api('/api/agents')).agents; }
   catch (e) { return; }
+  labSyncTenants(tenantsCache);  // la scène suit l'état réel des agents
   // Les agents déjà en ligne à l'arrivée sur la page ne rejouent pas la
   // finalisation — elle n'accompagne que les mises en ligne vues en direct.
   if (firstLoad) {
@@ -1190,7 +1252,12 @@ function initCookieNote() {
 
 function refresh() {
   const logged = Boolean(token);
+  // La scène suit l'opérateur : mode panneaux + snap pour le visiteur,
+  // laboratoire « chargé » (plus lumineux) une fois identifié.
+  document.body.dataset.guest = logged ? '0' : '1';
+  document.body.classList.toggle('lab-charged', logged);
   $('auth').classList.toggle('hidden', logged);
+  $('ritual').classList.toggle('hidden', logged);
   $('hero').classList.toggle('hidden', logged);
   $('shop').classList.toggle('hidden', !logged);
   $('fleet').classList.toggle('hidden', !logged);
@@ -1228,24 +1295,96 @@ function refresh() {
 initCookieNote();
 refresh();
 
-// Hermes prend vie : on ne charge la vidéo qu'ici (jamais bloquante), et elle
-// n'apparaît qu'une fois prête à jouer — sinon l'image reste, identique.
-(() => {
-  const v = document.getElementById('agent-video');
-  if (!v || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-  // Deux sources : WebM (VP9) puis MP4 (H.264) — le navigateur prend la première
-  // qu'il sait lire. Chargées ici seulement (jamais bloquantes pour la page).
-  for (const [src, type] of [['/static/agent-awake.webm', 'video/webm'],
-                             ['/static/agent-awake.mp4', 'video/mp4']]) {
-    const s = document.createElement('source');
-    s.src = src; s.type = type;
-    v.appendChild(s);
+// ══ LA MACHINE À ÉTATS DU LABORATOIRE ══
+// Le visiteur ne remplit pas un formulaire : il participe au rituel qui donne
+// vie à Hermès. Chaque interaction fait avancer la scène d'un état.
+const Lab = (() => {
+  const scene = $('lab-scene'), surge = $('scene-surge');
+  const vDormant = $('scene-dormant'), vAlive = $('scene-alive');
+  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let isAlive = false, lastShudder = 0;
+
+  function loadVideo(v, base, onReady) {
+    for (const [ext, type] of [['webm', 'video/webm'], ['mp4', 'video/mp4']]) {
+      const s = document.createElement('source');
+      s.src = `/static/${base}.${ext}`; s.type = type;
+      v.appendChild(s);
+    }
+    v.load();
+    v.addEventListener('canplay', () => onReady(v), { once: true });
   }
-  v.load();
-  v.addEventListener('canplay', () => {
-    v.play().then(() => v.classList.add('on')).catch(() => {});
-  }, { once: true });
+
+  function pulse(color, dur = 900) {
+    if (!surge || reduced) return;
+    surge.style.setProperty('--surge-color', color);
+    surge.style.setProperty('--surge-dur', dur + 'ms');
+    surge.classList.remove('pulse'); void surge.offsetWidth; surge.classList.add('pulse');
+  }
+
+  return {
+    // ACTE I — le laboratoire dort (boucle sommeil)
+    init() {
+      if (reduced || !vDormant) return;
+      loadVideo(vDormant, 'lab-dormant',
+        (v) => v.play().then(() => v.classList.add('on')).catch(() => {}));
+    },
+    // ACTE III — impulsions du rituel d'identification (1: email, 2: passe, 3: création)
+    surge(level) {
+      const colors = ['rgba(120,220,255,.20)', 'rgba(120,220,255,.30)', 'rgba(255,205,120,.34)'];
+      pulse(colors[Math.min(level, 3) - 1] || colors[0], 700 + level * 250);
+    },
+    // ACTE VI — le shot de data (paiement accepté, déploiement lancé)
+    inject() {
+      pulse('rgba(255,190,90,.45)', 1600);
+      setTimeout(() => pulse('rgba(255,220,140,.35)', 1200), 700);
+    },
+    // ACTE V — survol de Payer/Déployer : Hermès tressaille
+    shudder() {
+      const now = Date.now();
+      if (reduced || !scene || now - lastShudder < 900) return;
+      lastShudder = now;
+      scene.classList.remove('shudder'); void scene.offsetWidth; scene.classList.add('shudder');
+      pulse('rgba(120,220,255,.14)', 450);
+    },
+    // ACTES VII-VIII — Hermès vit : bascule sur la boucle « vie »
+    alive(withFlash) {
+      if (isAlive || reduced || !vAlive) { isAlive = true; return; }
+      isAlive = true;
+      if (withFlash) this.inject();
+      loadVideo(vAlive, 'lab-alive', (v) => v.play().then(() => {
+        v.classList.add('on');
+        if (vDormant) vDormant.classList.remove('on');
+      }).catch(() => {}));
+    },
+  };
 })();
+Lab.init();
+
+// Le rituel : chaque champ touché envoie une impulsion au laboratoire
+if ($('email')) $('email').addEventListener('focus', () => Lab.surge(1));
+if ($('password')) $('password').addEventListener('focus', () => Lab.surge(2));
+// Survol des actes décisifs (Payer / Déployer / Prolonger / S'abonner)
+document.addEventListener('mouseover', (e) => {
+  const b = e.target.closest('button');
+  if (b && /payer|déployer|prolonger|abonner/i.test(b.textContent || '')) Lab.shudder();
+});
+
+// Évolution d'Hermès selon l'état réel des agents : injection au paiement,
+// vie au premier agent en ligne — et éveil immédiat au retour du créateur.
+const labPrevStatus = {};
+function labSyncTenants(list) {
+  let anyRunning = false;
+  for (const a of list || []) {
+    const prev = labPrevStatus[a.id];
+    if (prev && prev !== a.status) {
+      if (a.status === 'pending' || a.status === 'deploying') Lab.inject();
+      if (a.status === 'running') Lab.alive(true);
+    }
+    labPrevStatus[a.id] = a.status;
+    if (a.status === 'running' && !(a.hosting && a.hosting.suspended)) anyRunning = true;
+  }
+  if (anyRunning) Lab.alive(false);
+}
 </script>
 </body>
 </html>
