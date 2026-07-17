@@ -1429,6 +1429,9 @@ const Lab = (() => {
   // saute, aucun faux mouvement.
   function base(name) {
     if (reduced) return;
+    // L'image fixe de secours suit l'état de référence (A = inerte, B = vivant)
+    const img = $('scene-img');
+    if (img) img.src = (name === 'alive') ? '/static/lab-b.webp' : '/static/lab.webp';
     const v = bases[name];
     if (!v || currentBase === name) return;
     const prevName = currentBase;
