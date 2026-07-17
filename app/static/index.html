@@ -153,6 +153,11 @@
                                      object-fit:cover; object-position:60% center; }
   .scene-v { opacity:0; transition:opacity 2s ease; }
   .scene-v.on { opacity:1; }
+  .scene-top { z-index:2; transition:opacity 1.1s ease; }  /* micro-scènes : fondu plus vif */
+  /* Pendant la NAISSANCE : le voile s'efface, la cinématique prend l'écran */
+  body.lab-birth #scene-veil { opacity:.22; }
+  body.lab-birth main { opacity:.15; transition:opacity .8s ease; pointer-events:none; }
+  main { transition:opacity .8s ease; }
   /* Voile de lisibilité : sombre à gauche (colonne de texte) + vignette bas.
      Plus dense une fois connecté (les cartes fonctionnelles priment). */
   #scene-veil { position:absolute; inset:0; pointer-events:none;
@@ -174,6 +179,24 @@
 
   /* ══ PANNEAUX — le texte vient à la scène, la scène ne bouge pas ══ */
   body[data-guest="1"] main { scroll-snap-type:y proximity; }
+  /* Connecté : tout le contenu client reste en COLONNE GAUCHE pour ne jamais
+     masquer Hermès (à droite de la scène). L'admin (réglages) garde la pleine
+     largeur — c'est de l'outillage, pas de la scène. */
+  body[data-guest="0"] main { max-width:none; margin:0; }
+  body[data-guest="0"] main > section, body[data-guest="0"] main > .verify-banner {
+    max-width:620px; margin-left:clamp(24px, 5vw, 80px); margin-right:0; }
+  body[data-guest="0"] main > section { margin-top:72px; }
+  body[data-guest="0"] #settings { max-width:1080px; }
+  /* Voile adapté : dense à gauche sous le texte, léger à droite pour VOIR Hermès */
+  body[data-guest="0"] #scene-veil {
+    background:linear-gradient(90deg, rgba(5,5,7,.93) 0%, rgba(5,5,7,.88) 46%,
+               rgba(5,5,7,.35) 68%, rgba(5,5,7,.15) 85%, rgba(5,5,7,.4) 100%); }
+  /* Grésillement (survol de Déployer/Payer) : la lumière hésite */
+  #lab-scene.flicker img, #lab-scene.flicker video { animation:labFlicker 1.1s steps(1,end) infinite; }
+  @keyframes labFlicker { 0%,100% { filter:brightness(1) } 7% { filter:brightness(.72) }
+    11% { filter:brightness(1.18) } 17% { filter:brightness(.85) } 23% { filter:brightness(1.05) }
+    41% { filter:brightness(.94) } 47% { filter:brightness(1.12) } 63% { filter:brightness(.8) }
+    68% { filter:brightness(1.02) } }
   .panel { min-height:92vh; display:grid; align-items:center; scroll-snap-align:start;
            padding:48px 0; }
   main section { scroll-margin-top:84px; }  /* le header ne recouvre pas les titres */
@@ -310,6 +333,9 @@
   <img id="scene-img" src="/static/lab.webp" alt="">
   <video id="scene-dormant" class="scene-v" muted loop playsinline preload="auto"></video>
   <video id="scene-alive" class="scene-v" muted loop playsinline preload="none"></video>
+  <!-- Micro-scènes one-shot (survols, création de compte, naissance) : jouées
+       par-dessus la boucle, puis fondu retour. Une par interaction possible. -->
+  <video id="scene-event" class="scene-v scene-top" muted playsinline preload="none"></video>
   <div id="scene-surge"></div>
   <div id="scene-veil"></div>
 </div>
@@ -394,7 +420,11 @@
     <h2>Un agent à vous, en deux clics</h2>
     <div class="grid" style="margin-top:24px">
       <input id="tname" placeholder="Nom de l'agent (ex. Agent Comptable)">
-      <input id="tsub" placeholder="Sous-domaine (généré si vide)">
+      <div>
+        <input id="tsub" placeholder="Sous-domaine (généré si vide)">
+        <div class="muted" style="font-size:12px;margin-top:6px">📍 Ce sera l'adresse web de votre
+          agent : <code>votre-choix.kechlab.com</code> — accessible partout, rien qu'à vous.</div>
+      </div>
       <select id="tmodel">
         <option value="openai/gpt-4o">GPT-4o (défaut)</option>
         <option value="openai/gpt-4o-mini">GPT-4o mini</option>
@@ -621,8 +651,11 @@ async function register() {
     $('msg').textContent = "Cochez la case pour accepter les CGV et la politique de confidentialité.";
     return;
   }
-  Lab.surge(3);  // troisième impulsion : le laboratoire s'active réellement
+  Lab.surge(3);
   await authCall('/api/auth/register', {accept_terms: true});
+  // Compte créé : GROSSE réaction — la pompe bat, la machinerie s'active.
+  // On est à un pas du paiement : la température monte.
+  if (token) Lab.event('account');
 }
 async function login() { await authCall('/api/auth/login'); }
 async function authCall(path, extra = {}) {
@@ -1295,22 +1328,40 @@ function refresh() {
 initCookieNote();
 refresh();
 
-// ══ LA MACHINE À ÉTATS DU LABORATOIRE ══
-// Le visiteur ne remplit pas un formulaire : il participe au rituel qui donne
-// vie à Hermès. Chaque interaction fait avancer la scène d'un état.
+// ══ LE MOTEUR DU LABORATOIRE (v2) ══
+// Autant de micro-scènes que d'interactions : chaque geste de l'opérateur
+// déclenche une réaction filmée de l'atelier, par-dessus la boucle ambiante.
+// Priorités : naissance > création de compte > survols. La température monte.
 const Lab = (() => {
   const scene = $('lab-scene'), surge = $('scene-surge');
-  const vDormant = $('scene-dormant'), vAlive = $('scene-alive');
+  const vDormant = $('scene-dormant'), vAlive = $('scene-alive'), vEvent = $('scene-event');
   const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   let isAlive = false, lastShudder = 0;
+  let playing = null;           // micro-scène en cours { name, prio }
+  const lastPlayed = {};        // anti-spam par scène (survols répétés)
+  const EVENTS = {
+    intro:    { prio: 5, cooldown: 0 },       // arrivée : les néons s'allument
+    email:    { prio: 1, cooldown: 45000 },   // moniteur : code qui défile
+    password: { prio: 1, cooldown: 45000 },   // tubes turquoise : bulles + rétroéclairage
+    account:  { prio: 4, cooldown: 0 },       // GROS : pompe qui bat, machinerie générale
+    name:     { prio: 1, cooldown: 45000 },   // orbe quantique : lacets de lumière
+    sub:      { prio: 1, cooldown: 45000 },   // manomètres + bouffées de vapeur
+    deploy:   { prio: 2, cooldown: 20000 },   // la lumière grésille, suspense
+    birth:    { prio: 6, cooldown: 0 },       // la NAISSANCE (payée) : cinématique longue
+  };
 
-  function loadVideo(v, base, onReady) {
+  function setSources(v, base) {
+    v.pause(); v.innerHTML = '';
     for (const [ext, type] of [['webm', 'video/webm'], ['mp4', 'video/mp4']]) {
       const s = document.createElement('source');
-      s.src = `/static/${base}.${ext}`; s.type = type;
+      s.src = `/static/lab-${base}.${ext}`; s.type = type;
       v.appendChild(s);
     }
     v.load();
+  }
+
+  function loadLoop(v, base, onReady) {
+    setSources(v, base);
     v.addEventListener('canplay', () => onReady(v), { once: true });
   }
 
@@ -1321,37 +1372,70 @@ const Lab = (() => {
     surge.classList.remove('pulse'); void surge.offsetWidth; surge.classList.add('pulse');
   }
 
+  function endEvent() {
+    const was = playing && playing.name;
+    playing = null;
+    if (vEvent) { vEvent.classList.remove('on'); setTimeout(() => { vEvent.innerHTML = ''; }, 1200); }
+    // Après la naissance : l'interface revient, le fond devient la boucle « vie »
+    if (was === 'birth') { document.body.classList.remove('lab-birth'); Lab.alive(false); }
+  }
+
   return {
-    // ACTE I — le laboratoire dort (boucle sommeil)
     init() {
       if (reduced || !vDormant) return;
-      loadVideo(vDormant, 'lab-dormant',
-        (v) => v.play().then(() => v.classList.add('on')).catch(() => {}));
+      // Boucle ambiante d'abord (elle sert de fond au retour de chaque scène)
+      loadLoop(vDormant, 'dormant', (v) => v.play().then(() => v.classList.add('on')).catch(() => {}));
+      // L'ARRIVÉE : une fois par session, les néons s'allument difficilement
+      if (!sessionStorage.getItem('lab_intro')) {
+        sessionStorage.setItem('lab_intro', '1');
+        this.event('intro');
+      }
     },
-    // ACTE III — impulsions du rituel d'identification (1: email, 2: passe, 3: création)
+    // Joue une micro-scène par-dessus la boucle. Ignorée si une scène plus
+    // prioritaire est en cours, ou si elle a déjà joué récemment (cooldown).
+    event(name) {
+      const cfg = EVENTS[name];
+      if (!cfg || reduced || !vEvent) return;
+      const now = Date.now();
+      if (cfg.cooldown && lastPlayed[name] && now - lastPlayed[name] < cfg.cooldown) return;
+      if (playing && EVENTS[playing.name].prio >= cfg.prio) return;
+      lastPlayed[name] = now;
+      playing = { name };
+      if (name === 'birth') document.body.classList.add('lab-birth');
+      setSources(vEvent, name);
+      vEvent.loop = false;
+      vEvent.onended = endEvent;
+      vEvent.onerror = endEvent;
+      vEvent.addEventListener('canplay', () => {
+        if (!playing || playing.name !== name) return;
+        vEvent.play().then(() => vEvent.classList.add('on')).catch(endEvent);
+      }, { once: true });
+      // Garde-fou : si la vidéo n'existe pas / ne charge pas, on libère
+      setTimeout(() => { if (playing && playing.name === name && vEvent.currentTime === 0) endEvent(); }, 6000);
+      // Accent lumineux immédiat (le temps que la vidéo arrive)
+      const colors = { email: 'rgba(120,220,255,.18)', password: 'rgba(87,217,194,.25)',
+                       account: 'rgba(255,205,120,.35)', name: 'rgba(150,230,255,.2)',
+                       sub: 'rgba(200,220,255,.16)', deploy: 'rgba(255,180,90,.22)',
+                       birth: 'rgba(255,210,120,.45)', intro: 'rgba(120,220,255,.12)' };
+      pulse(colors[name] || 'rgba(120,220,255,.15)', name === 'birth' ? 1800 : 900);
+    },
     surge(level) {
       const colors = ['rgba(120,220,255,.20)', 'rgba(120,220,255,.30)', 'rgba(255,205,120,.34)'];
       pulse(colors[Math.min(level, 3) - 1] || colors[0], 700 + level * 250);
     },
-    // ACTE VI — le shot de data (paiement accepté, déploiement lancé)
-    inject() {
-      pulse('rgba(255,190,90,.45)', 1600);
-      setTimeout(() => pulse('rgba(255,220,140,.35)', 1200), 700);
-    },
-    // ACTE V — survol de Payer/Déployer : Hermès tressaille
+    inject() { this.event('birth'); },
     shudder() {
       const now = Date.now();
       if (reduced || !scene || now - lastShudder < 900) return;
       lastShudder = now;
       scene.classList.remove('shudder'); void scene.offsetWidth; scene.classList.add('shudder');
-      pulse('rgba(120,220,255,.14)', 450);
     },
-    // ACTES VII-VIII — Hermès vit : bascule sur la boucle « vie »
-    alive(withFlash) {
+    flicker(on) { if (!reduced && scene) scene.classList.toggle('flicker', on); },
+    alive(withCinematic) {
       if (isAlive || reduced || !vAlive) { isAlive = true; return; }
       isAlive = true;
-      if (withFlash) this.inject();
-      loadVideo(vAlive, 'lab-alive', (v) => v.play().then(() => {
+      if (withCinematic) this.event('birth');
+      loadLoop(vAlive, 'alive', (v) => v.play().then(() => {
         v.classList.add('on');
         if (vDormant) vDormant.classList.remove('on');
       }).catch(() => {}));
@@ -1360,14 +1444,29 @@ const Lab = (() => {
 })();
 Lab.init();
 
-// Le rituel : chaque champ touché envoie une impulsion au laboratoire
-if ($('email')) $('email').addEventListener('focus', () => Lab.surge(1));
-if ($('password')) $('password').addEventListener('focus', () => Lab.surge(2));
-// Survol des actes décisifs (Payer / Déployer / Prolonger / S'abonner)
+// ── Le câblage du rituel : une réaction par interaction ─────────────
+// Identification
+if ($('email')) ['focus', 'mouseenter'].forEach(ev => $('email').addEventListener(ev, () => { Lab.surge(1); Lab.event('email'); }));
+if ($('password')) ['focus', 'mouseenter'].forEach(ev => $('password').addEventListener(ev, () => { Lab.surge(2); Lab.event('password'); }));
+// Commande : nom de l'agent, sous-domaine
+if ($('tname')) $('tname').addEventListener('mouseenter', () => Lab.event('name'));
+if ($('tsub')) $('tsub').addEventListener('mouseenter', () => Lab.event('sub'));
+// Actes décisifs : la lumière grésille, Hermès tressaille, le désir monte
 document.addEventListener('mouseover', (e) => {
   const b = e.target.closest('button');
-  if (b && /payer|déployer|prolonger|abonner/i.test(b.textContent || '')) Lab.shudder();
+  if (b && /payer|déployer|prolonger|abonner/i.test(b.textContent || '')) {
+    Lab.shudder(); Lab.event('deploy'); Lab.flicker(true);
+  }
 });
+document.addEventListener('mouseout', (e) => {
+  const b = e.target.closest('button');
+  if (b && /payer|déployer|prolonger|abonner/i.test(b.textContent || '')) Lab.flicker(false);
+});
+// Retour de paiement (Stripe ou page simulée) : la naissance, pour de vrai
+if (new URLSearchParams(location.search).get('paiement') === 'ok') {
+  setTimeout(() => Lab.event('birth'), 600);
+  history.replaceState(null, '', location.pathname);
+}
 
 // Évolution d'Hermès selon l'état réel des agents : injection au paiement,
 // vie au premier agent en ligne — et éveil immédiat au retour du créateur.
@@ -1377,8 +1476,10 @@ function labSyncTenants(list) {
   for (const a of list || []) {
     const prev = labPrevStatus[a.id];
     if (prev && prev !== a.status) {
-      if (a.status === 'pending' || a.status === 'deploying') Lab.inject();
-      if (a.status === 'running') Lab.alive(true);
+      // Paiement accepté → la NAISSANCE (cinématique longue) accompagne le
+      // déploiement Docker ; à « running », la boucle vie prend le relais.
+      if (a.status === 'pending' || a.status === 'deploying') Lab.event('birth');
+      if (a.status === 'running') Lab.alive(false);
     }
     labPrevStatus[a.id] = a.status;
     if (a.status === 'running' && !(a.hosting && a.hosting.suspended)) anyRunning = true;
