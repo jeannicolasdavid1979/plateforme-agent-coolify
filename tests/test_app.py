@@ -1244,3 +1244,41 @@ def test_stripe_api_failure_falls_back_to_simulated(monkeypatch):
         assert data["checkout_url"].startswith("/pay/")
     finally:
         get_settings().stripe_secret_key = ""
+
+
+def test_stripe_api_status_detects_publishable_key():
+    """Erreur classique : coller la clé PUBLIQUE pk_ dans STRIPE_SECRET_KEY.
+    Le diagnostic doit le dire clairement, et le mode API rester inactif
+    (aucun appel réseau tenté)."""
+    from app import stripe_pay
+    from app.config import get_settings
+
+    get_settings().stripe_secret_key = "pk_live_abc123"
+    try:
+        st = stripe_pay.api_status()
+        assert st["enabled"] is False
+        assert st["state"] == "wrong_key_type"
+        assert "PUBLIQUE" in st["detail"]
+        assert stripe_pay.api_enabled() is False
+        # Pas d'appel API avec une clé publique : repli immédiat (None)
+        assert stripe_pay.create_checkout_session(
+            checkout_id="x", product_name="T", amount_eur=10.0) is None
+    finally:
+        get_settings().stripe_secret_key = ""
+    assert stripe_pay.api_status()["state"] == "absent"
+
+
+def test_stripe_api_status_valid_key(monkeypatch):
+    from app import stripe_pay
+    from app.config import get_settings
+
+    class _R:
+        status_code = 200
+    monkeypatch.setattr(stripe_pay.httpx, "get", lambda url, auth=None, timeout=None: _R())
+    get_settings().stripe_secret_key = "sk_live_ok"
+    try:
+        st = stripe_pay.api_status()
+        assert st["enabled"] is True and st["state"] == "ok"
+        assert "LIVE" in st["detail"]
+    finally:
+        get_settings().stripe_secret_key = ""

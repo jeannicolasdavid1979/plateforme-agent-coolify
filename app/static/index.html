@@ -149,10 +149,17 @@
   @keyframes floatSlow { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-12px)} }
   .agent-visual { position:relative; justify-self:end; width:100%; max-width:420px;
                   animation:floatSlow 9s ease-in-out infinite; }
-  .agent-visual img { width:100%; max-height:620px; object-fit:cover; display:block;
+  .agent-visual img, .agent-visual video {
+                      width:100%; max-height:620px; object-fit:cover; display:block;
                       filter:brightness(.88) contrast(1.04);
                       -webkit-mask-image:radial-gradient(95% 85% at 50% 42%, #000 40%, transparent 76%);
                       mask-image:radial-gradient(95% 85% at 50% 42%, #000 40%, transparent 76%); }
+  /* Hermes animé : la vidéo (générée depuis la MÊME image, même cadrage) fond
+     en douceur par-dessus le portrait — continuité graphique totale, et repli
+     silencieux sur l'image si la vidéo manque ou si le réseau est lent. */
+  .agent-visual video { position:absolute; inset:0; height:100%;
+                        opacity:0; transition:opacity 1.6s ease; }
+  .agent-visual video.on { opacity:1; }
   .agent-visual::after { content:""; position:absolute; inset:auto 10% -8% 10%; height:24px;
                          background:radial-gradient(50% 100% at 50% 50%, rgba(224,164,88,.14), transparent 70%);
                          filter:blur(6px); }
@@ -281,12 +288,14 @@
     </div>
     <div class="agent-visual fade-up d2">
       <img src="/static/agent.webp" alt="Agent Hermes" width="900" height="1200">
+      <video id="agent-video" muted loop playsinline preload="auto" aria-hidden="true"></video>
     </div>
   </section>
 
   <!-- Section : Connexion (glass-medium) -->
   <section id="auth" class="card glass-m fade-up d2" style="max-width:420px">
-    <h2>Connexion</h2>
+    <h2>Créez votre compte</h2>
+    <p class="muted" style="margin-top:-4px;font-size:14px">Votre agent IA personnel vous attend — deux minutes suffisent.</p>
     <input id="email" type="email" placeholder="email@exemple.com" autocomplete="email">
     <input id="password" type="password" placeholder="mot de passe (8+ caractères)" autocomplete="current-password">
     <label class="consent" style="display:flex;gap:9px;align-items:flex-start;margin-top:12px;font-size:13px;color:var(--muted);cursor:pointer">
@@ -295,10 +304,11 @@
         <a href="/legal/cgv" target="_blank">CGV / CGU</a> et la
         <a href="/legal/confidentialite" target="_blank">politique de confidentialité</a>.</span>
     </label>
-    <div class="row" style="margin-top:12px">
-      <button onclick="login()">Se connecter</button>
-      <button class="ghost" onclick="register()">Créer un compte</button>
+    <div class="row" style="margin-top:14px">
+      <button onclick="register()" style="flex:1">Créer mon compte</button>
     </div>
+    <p style="margin-top:12px;font-size:13px" class="muted">Déjà client ?
+      <a href="#" class="link-muted" onclick="event.preventDefault(); login()">Se connecter</a></p>
     <p id="msg"></p>
     <p style="margin-top:4px"><a href="#" onclick="toggleForgot(event)" class="link-muted">Mot de passe oublié ?</a></p>
     <div id="forgot" class="hidden" style="margin-top:12px;border-top:1px solid var(--line);padding-top:14px">
@@ -630,9 +640,9 @@ async function loadStripe() {
     $('s-host-sub').value = stripeLinks.hosting_sub || '';
     $('s-host-annual').value = stripeLinks.hosting_annual || '';
     renderTopupRows();  // réaffiche les lignes avec leurs liens
-    if ($('stripe-mode')) $('stripe-mode').textContent = d.api_enabled
-      ? '✔ API Stripe active — tout est automatique'
-      : 'Mode liens/simulation (STRIPE_SECRET_KEY absente)';
+    if ($('stripe-mode')) $('stripe-mode').textContent = (d.api && d.api.state === 'ok')
+      ? '✔ API Stripe : ' + d.api.detail
+      : '⚠ API Stripe : ' + ((d.api && d.api.detail) || 'état inconnu');
     $('wh-state').textContent = d.webhook_configured
       ? '✔ Webhook signé' : '⚠ Webhook non signé (STRIPE_WEBHOOK_SECRET absent)';
   } catch (e) { /* non-admin ou indisponible */ }
@@ -1198,6 +1208,12 @@ function refresh() {
       if (isAdmin) { renderCachedTenants(); loadStripe(); loadFleet(); loadPromos(); }
     }).catch(() => {});
     loadPricing().then(loadTenants);
+    // Atterrissage sur « Commander » (et pas sur « Mon compte » restauré par
+    // le navigateur) : on remonte sur la section de commande.
+    requestAnimationFrame(() => {
+      const s = $('shop');
+      if (s) s.scrollIntoView({ block: 'start' });
+    });
   }
 }
 
@@ -1211,6 +1227,25 @@ function refresh() {
 })();
 initCookieNote();
 refresh();
+
+// Hermes prend vie : on ne charge la vidéo qu'ici (jamais bloquante), et elle
+// n'apparaît qu'une fois prête à jouer — sinon l'image reste, identique.
+(() => {
+  const v = document.getElementById('agent-video');
+  if (!v || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  // Deux sources : WebM (VP9) puis MP4 (H.264) — le navigateur prend la première
+  // qu'il sait lire. Chargées ici seulement (jamais bloquantes pour la page).
+  for (const [src, type] of [['/static/agent-awake.webm', 'video/webm'],
+                             ['/static/agent-awake.mp4', 'video/mp4']]) {
+    const s = document.createElement('source');
+    s.src = src; s.type = type;
+    v.appendChild(s);
+  }
+  v.load();
+  v.addEventListener('canplay', () => {
+    v.play().then(() => v.classList.add('on')).catch(() => {});
+  }, { once: true });
+})();
 </script>
 </body>
 </html>

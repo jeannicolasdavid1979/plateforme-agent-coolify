@@ -3,6 +3,23 @@
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/).
 Les dates suivent l'ordre de développement.
 
+## [Non publié — branche de test] — Hermes animé, diagnostic Stripe, parcours d'accueil
+
+### Ajouté
+- **Hermes prend vie** : vidéo d'éveil générée depuis le portrait d'origine
+  (même cadrage exact — les yeux s'embrasent en cyan, le caducée pectoral pulse
+  en or, poussières dorées, caméra qui respire). Fondu doux par-dessus l'image,
+  boucle de 5 s, deux formats légers (WebM VP9 252 Ko + MP4 H.264 418 Ko),
+  repli automatique sur l'image fixe (vidéo absente, réseau lent ou
+  `prefers-reduced-motion`).
+- **Diagnostic de clé Stripe en direct** dans l'admin : détecte une clé
+  PUBLIQUE `pk_` collée à la place de la SECRÈTE `sk_` (erreur classique — la
+  pastille l'explique), une clé refusée par Stripe (401) ou valide (LIVE/TEST).
+  Aucun appel API tenté avec une clé du mauvais type (repli immédiat).
+- **Parcours d'accueil** : « Créer un compte » devient l'action principale
+  (« Se connecter » discret en dessous) ; après connexion, on atterrit sur
+  « Commander » (plus de dérive vers « Mon compte »).
+
 ## [Non publié] — Stripe en mode API automatique
 
 ### Ajouté

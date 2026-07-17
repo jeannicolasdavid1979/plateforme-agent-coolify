@@ -1181,10 +1181,13 @@ def delete_promo(code: str, admin: User = Depends(require_admin), db: Session = 
 
 @router.get("/api/admin/stripe")
 def get_stripe_links(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
-    """Liens de paiement Stripe configurés + état de l'intégration (API/webhook)."""
+    """Liens de paiement Stripe configurés + état de l'intégration (API/webhook).
+    `api` contient un diagnostic en direct de la clé (absente / clé publique
+    collée par erreur / refusée / valide)."""
     return {
         "links": stripe_pay.get_links(db),
         "api_enabled": stripe_pay.api_enabled(),
+        "api": stripe_pay.api_status(),
         "webhook_configured": bool(get_settings().stripe_webhook_secret),
         "webhook_url": "/api/stripe/webhook",
     }

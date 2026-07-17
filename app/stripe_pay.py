@@ -38,7 +38,40 @@ _MIN_CENTS = 50
 
 
 def api_enabled() -> bool:
-    return bool(get_settings().stripe_secret_key)
+    """Mode API utilisable : clé présente ET du bon type (secrète sk_/rk_)."""
+    key = get_settings().stripe_secret_key
+    return bool(key) and key.startswith(("sk_", "rk_"))
+
+
+def api_status() -> dict:
+    """Diagnostic complet de la clé API pour l'admin : absente, mauvais type
+    (clé publique pk_ collée à la place de la secrète — erreur classique),
+    refusée par Stripe, ou valide (live/test). Vérification EN DIRECT contre
+    l'API quand la clé a la bonne forme."""
+    key = get_settings().stripe_secret_key
+    if not key:
+        return {"enabled": False, "state": "absent",
+                "detail": "STRIPE_SECRET_KEY absente — mode liens/simulation"}
+    if not key.startswith(("sk_", "rk_")):
+        return {"enabled": False, "state": "wrong_key_type",
+                "detail": "La clé fournie n'est PAS une clé secrète (elle commence "
+                          "par « " + key[:8] + "… ») : c'est probablement la clé "
+                          "PUBLIQUE pk_. Mettez la clé SECRÈTE sk_live_… "
+                          "(Stripe → Developers → API keys)"}
+    try:
+        resp = httpx.get("https://api.stripe.com/v1/balance", auth=(key, ""), timeout=10)
+        if resp.status_code == 200:
+            live = "_live" in key[:8]
+            return {"enabled": True, "state": "ok",
+                    "detail": f"clé {'LIVE' if live else 'TEST'} valide — sessions générées par l'API"}
+        if resp.status_code == 401:
+            return {"enabled": False, "state": "invalid",
+                    "detail": "clé refusée par Stripe (401) — valeur erronée ou révoquée"}
+        return {"enabled": True, "state": "unexpected",
+                "detail": f"réponse Stripe inattendue ({resp.status_code})"}
+    except Exception as exc:  # noqa: BLE001
+        return {"enabled": True, "state": "unreachable",
+                "detail": f"API Stripe injoignable ({exc.__class__.__name__})"}
 
 
 def create_checkout_session(
@@ -54,7 +87,9 @@ def create_checkout_session(
     si le montant est sous le minimum Stripe, ou en cas d'erreur (l'appelant
     retombe alors sur les Payment Links puis la page simulée)."""
     s = get_settings()
-    if not s.stripe_secret_key:
+    # Une clé absente OU du mauvais type (pk_ publique) → pas d'appel API :
+    # repli immédiat sur les liens, sans latence d'un 401 garanti.
+    if not api_enabled():
         return None
     cents = int(round(amount_eur * 100))
     if cents < _MIN_CENTS:
