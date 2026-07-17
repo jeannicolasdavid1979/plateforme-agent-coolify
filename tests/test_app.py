@@ -1282,3 +1282,26 @@ def test_stripe_api_status_valid_key(monkeypatch):
         assert "LIVE" in st["detail"]
     finally:
         get_settings().stripe_secret_key = ""
+
+
+def test_lab_scene_config_admin():
+    """L'admin pilote le mapping interaction → scène ; lecture publique."""
+    # Défauts : chaque déclencheur pointe sur lab-<nom>
+    d = client.get("/api/lab-config").json()["map"]
+    assert d["intro"] == "lab-intro" and d["birth"] == "lab-birth"
+
+    admin = _admin("scenes-admin@ex.io")
+    r = client.put("/api/admin/lab-config",
+                   json={"map": {"intro": "lab-intro-noel", "birth": "lab-birth-v2"}},
+                   headers=admin)
+    assert r.status_code == 200
+    d = client.get("/api/lab-config").json()["map"]
+    assert d["intro"] == "lab-intro-noel"
+    assert d["birth"] == "lab-birth-v2"
+    assert d["dormant"] == "lab-dormant"  # non modifié → défaut
+
+    # Déclencheur inconnu et nom invalide refusés ; non-admin refusé
+    assert client.put("/api/admin/lab-config", json={"map": {"xxx": "a"}}, headers=admin).status_code == 400
+    assert client.put("/api/admin/lab-config", json={"map": {"intro": "../evil"}}, headers=admin).status_code == 400
+    user = _register("scenes-user@ex.io")
+    assert client.put("/api/admin/lab-config", json={"map": {}}, headers=user).status_code == 403

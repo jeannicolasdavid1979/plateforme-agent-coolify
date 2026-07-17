@@ -186,7 +186,9 @@
   body[data-guest="0"] main > section, body[data-guest="0"] main > .verify-banner {
     max-width:620px; margin-left:clamp(24px, 5vw, 80px); margin-right:0; }
   body[data-guest="0"] main > section { margin-top:72px; }
-  body[data-guest="0"] #settings { max-width:1080px; }
+  /* L'admin aussi reste en colonne gauche : Hermès ne doit JAMAIS être couvert */
+  body[data-guest="0"] #settings { max-width:680px; }
+  body[data-guest="0"] .prod-grid { grid-template-columns:1fr; }
   /* Voile adapté : dense à gauche sous le texte, léger à droite pour VOIR Hermès */
   body[data-guest="0"] #scene-veil {
     background:linear-gradient(90deg, rgba(5,5,7,.93) 0%, rgba(5,5,7,.88) 46%,
@@ -332,6 +334,7 @@
 <div id="lab-scene" aria-hidden="true">
   <img id="scene-img" src="/static/lab.webp" alt="">
   <video id="scene-dormant" class="scene-v" muted loop playsinline preload="auto"></video>
+  <video id="scene-deploying" class="scene-v" muted loop playsinline preload="none"></video>
   <video id="scene-alive" class="scene-v" muted loop playsinline preload="none"></video>
   <!-- Micro-scènes one-shot (survols, création de compte, naissance) : jouées
        par-dessus la boucle, puis fondu retour. Une par interaction possible. -->
@@ -342,6 +345,7 @@
 <header>
   <div class="brand">HER<span>MES</span></div>
   <div class="row">
+    <button id="sound-btn" class="ghost mini" onclick="LabAudio.toggle()" title="Couper le son">🔊</button>
     <span id="who" class="muted"></span>
     <button id="logout" class="ghost hidden" onclick="logout()">Déconnexion</button>
   </div>
@@ -390,10 +394,9 @@
         <a href="/legal/confidentialite" target="_blank">politique de confidentialité</a>.</span>
     </label>
     <div class="row" style="margin-top:14px">
-      <button onclick="register()" style="flex:1">Créer mon compte</button>
+      <button onclick="register()" style="flex:2">Créer mon compte</button>
+      <button class="ghost" onclick="login()" style="flex:1">Se connecter</button>
     </div>
-    <p style="margin-top:12px;font-size:13px" class="muted">Déjà client ?
-      <a href="#" class="link-muted" onclick="event.preventDefault(); login()">Se connecter</a></p>
     <p id="msg"></p>
     <p style="margin-top:4px"><a href="#" onclick="toggleForgot(event)" class="link-muted">Mot de passe oublié ?</a></p>
     <div id="forgot" class="hidden" style="margin-top:12px;border-top:1px solid var(--line);padding-top:14px">
@@ -535,6 +538,19 @@
       </div>
       <div id="topup-rows" class="topup-rows"></div>
       <button class="ghost mini" type="button" onclick="addTopupRow()">+ Ajouter un montant</button>
+    </div>
+
+    <!-- Scènes & interactions : l'admin pilote les animations de l'atelier -->
+    <div class="prod-card wide">
+      <div class="prod-head"><span class="prod-ico">🎬</span><h3>Scènes &amp; interactions</h3></div>
+      <p class="prod-sub">Chaque interaction déclenche une scène vidéo. Pour renouveler l'ambiance,
+        déposez de nouveaux fichiers <code>.webm</code>+<code>.mp4</code> dans <code>app/static/</code>
+        et indiquez leur nom (sans extension) ici. Vide = scène par défaut <code>lab-…</code>.</p>
+      <div id="scene-rows" class="topup-rows"></div>
+      <div class="row" style="margin-top:10px">
+        <button class="ghost mini" onclick="saveScenes()">Enregistrer les scènes</button>
+        <span id="scenes-msg" class="muted"></span>
+      </div>
     </div>
 
     <!-- Cycle de vie de l'hébergement -->
@@ -722,6 +738,47 @@ function renderTopupRows() {
 function addTopupRow() {
   const box = $('topup-rows');
   if (box) box.insertAdjacentHTML('beforeend', topupRowHtml('', ''));
+}
+
+// ── Admin : pilotage des scènes de l'atelier ────────────────────────
+const SCENE_LABELS = {
+  intro: "Arrivée sur le site (allumage de l'atelier)",
+  dormant: "Boucle ambiante (atelier en veille)",
+  email: "Survol / saisie de l'email",
+  password: "Survol / saisie du mot de passe",
+  account: "Compte créé (grosse activation)",
+  name: "Survol du nom de l'agent",
+  sub: "Survol du sous-domaine",
+  deploy: "Survol de Déployer / Payer (suspense)",
+  deploying: "Boucle pendant le déploiement",
+  birth: "Naissance (après paiement, livraison)",
+  alive: "Boucle agent en vie",
+  delete: "Suppression (agent foudroyé)",
+};
+
+async function loadScenes() {
+  if (!isAdmin || !$('scene-rows')) return;
+  try {
+    const d = await api('/api/lab-config');
+    $('scene-rows').innerHTML = Object.entries(SCENE_LABELS).map(([k, label]) => `
+      <div class="topup-row">
+        <span class="muted" style="flex:1;font-size:12px">${label}</span>
+        <input class="tr-link sc-input" data-trigger="${k}" style="max-width:220px"
+               value="${(d.map && d.map[k]) || ''}" placeholder="lab-${k}">
+      </div>`).join('');
+  } catch (e) { /* non-admin */ }
+}
+
+async function saveScenes() {
+  const map = {};
+  document.querySelectorAll('.sc-input').forEach(i => {
+    const v = i.value.trim();
+    if (v) map[i.dataset.trigger] = v.replace(/\.(webm|mp4)$/i, '');
+  });
+  try {
+    await api('/api/admin/lab-config', {method: 'PUT', body: JSON.stringify({map})});
+    $('scenes-msg').textContent = '✔ Scènes enregistrées (rechargez pour appliquer)';
+  } catch (e) { $('scenes-msg').textContent = e.message; }
 }
 
 async function loadStripe() {
@@ -1086,6 +1143,7 @@ async function destroy(id, name) {
   if (typed.trim() !== name) { alert('Le nom ne correspond pas — suppression annulée.'); return; }
   try {
     await api(`/api/agents/${id}`, {method:'DELETE'});
+    Lab.event('delete');  // l'agent est foudroyé par survoltage ⚡
     loadTenants();
   } catch (e) { alert(e.message); }
 }
@@ -1305,7 +1363,7 @@ function refresh() {
       $('who').textContent = email + (isAdmin ? ' · admin' : '');
       $('settings').classList.toggle('hidden', !isAdmin);
       $('verify-banner').classList.toggle('hidden', !!me.email_verified);
-      if (isAdmin) { renderCachedTenants(); loadStripe(); loadFleet(); loadPromos(); }
+      if (isAdmin) { renderCachedTenants(); loadStripe(); loadFleet(); loadPromos(); loadScenes(); }
     }).catch(() => {});
     loadPricing().then(loadTenants);
     // Atterrissage sur « Commander » (et pas sur « Mon compte » restauré par
@@ -1328,41 +1386,63 @@ function refresh() {
 initCookieNote();
 refresh();
 
-// ══ LE MOTEUR DU LABORATOIRE (v2) ══
-// Autant de micro-scènes que d'interactions : chaque geste de l'opérateur
-// déclenche une réaction filmée de l'atelier, par-dessus la boucle ambiante.
-// Priorités : naissance > création de compte > survols. La température monte.
+// ══ LE MOTEUR DU LABORATOIRE (v3) ══
+// Continuité stricte : chaque scène part du plan de référence et s'y referme
+// (tous cycles clos). Trois boucles de fond commutables (sommeil, déploiement,
+// vie) + micro-scènes one-shot par interaction. Mapping des scènes piloté par
+// l'admin (« Scènes & interactions ») pour renouveler le site mois après mois.
 const Lab = (() => {
   const scene = $('lab-scene'), surge = $('scene-surge');
-  const vDormant = $('scene-dormant'), vAlive = $('scene-alive'), vEvent = $('scene-event');
+  const bases = { dormant: $('scene-dormant'), deploying: $('scene-deploying'), alive: $('scene-alive') };
+  const vEvent = $('scene-event');
   const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  let isAlive = false, lastShudder = 0;
-  let playing = null;           // micro-scène en cours { name, prio }
-  const lastPlayed = {};        // anti-spam par scène (survols répétés)
+  let currentBase = null, lastShudder = 0;
+  let playing = null;
+  const lastPlayed = {};
+  let sceneMap = {};
   const EVENTS = {
-    intro:    { prio: 5, cooldown: 0 },       // arrivée : les néons s'allument
-    email:    { prio: 1, cooldown: 45000 },   // moniteur : code qui défile
-    password: { prio: 1, cooldown: 45000 },   // tubes turquoise : bulles + rétroéclairage
-    account:  { prio: 4, cooldown: 0 },       // GROS : pompe qui bat, machinerie générale
-    name:     { prio: 1, cooldown: 45000 },   // orbe quantique : lacets de lumière
-    sub:      { prio: 1, cooldown: 45000 },   // manomètres + bouffées de vapeur
-    deploy:   { prio: 2, cooldown: 20000 },   // la lumière grésille, suspense
-    birth:    { prio: 6, cooldown: 0 },       // la NAISSANCE (payée) : cinématique longue
+    intro:    { prio: 5, cooldown: 0 },
+    email:    { prio: 1, cooldown: 45000 },
+    password: { prio: 1, cooldown: 45000 },
+    account:  { prio: 4, cooldown: 0 },
+    name:     { prio: 1, cooldown: 45000 },
+    sub:      { prio: 1, cooldown: 45000 },
+    deploy:   { prio: 2, cooldown: 20000 },
+    birth:    { prio: 6, cooldown: 0 },
+    delete:   { prio: 6, cooldown: 0 },     // l'agent foudroyé par survoltage
   };
 
-  function setSources(v, base) {
+  function fileFor(name) { return sceneMap[name] || ('lab-' + name); }
+
+  function setSources(v, name) {
     v.pause(); v.innerHTML = '';
     for (const [ext, type] of [['webm', 'video/webm'], ['mp4', 'video/mp4']]) {
       const s = document.createElement('source');
-      s.src = `/static/lab-${base}.${ext}`; s.type = type;
+      s.src = `/static/${fileFor(name)}.${ext}`; s.type = type;
       v.appendChild(s);
     }
     v.load();
   }
 
-  function loadLoop(v, base, onReady) {
-    setSources(v, base);
-    v.addEventListener('canplay', () => onReady(v), { once: true });
+  // RACCORD STRICT : chaque scène commence et finit sur le plan de référence ;
+  // au retour, la boucle de fond repart de sa frame 0 (le même plan) — aucune
+  // saute, aucun faux mouvement.
+  function base(name) {
+    if (reduced) return;
+    const v = bases[name];
+    if (!v || currentBase === name) return;
+    const prevName = currentBase;
+    currentBase = name;
+    const show = () => {
+      try { v.currentTime = 0; } catch (e) {}
+      v.play().then(() => {
+        v.classList.add('on');
+        for (const [n, o] of Object.entries(bases)) if (n !== name && o) o.classList.remove('on');
+      }).catch(() => {});
+    };
+    if (v.readyState >= 3) show();
+    else { setSources(v, name); v.addEventListener('canplay', show, { once: true }); }
+    setTimeout(() => { if (currentBase === name && v.readyState < 3 && prevName) currentBase = prevName; }, 6000);
   }
 
   function pulse(color, dur = 900) {
@@ -1375,24 +1455,23 @@ const Lab = (() => {
   function endEvent() {
     const was = playing && playing.name;
     playing = null;
+    const b = bases[currentBase];
+    if (b) { try { b.currentTime = 0; } catch (e) {} }
     if (vEvent) { vEvent.classList.remove('on'); setTimeout(() => { vEvent.innerHTML = ''; }, 1200); }
-    // Après la naissance : l'interface revient, le fond devient la boucle « vie »
-    if (was === 'birth') { document.body.classList.remove('lab-birth'); Lab.alive(false); }
+    if (was === 'birth') { document.body.classList.remove('lab-birth'); base('alive'); }
+    if (was === 'delete') base('dormant');
   }
 
   return {
-    init() {
-      if (reduced || !vDormant) return;
-      // Boucle ambiante d'abord (elle sert de fond au retour de chaque scène)
-      loadLoop(vDormant, 'dormant', (v) => v.play().then(() => v.classList.add('on')).catch(() => {}));
-      // L'ARRIVÉE : une fois par session, les néons s'allument difficilement
+    async init() {
+      if (reduced) return;
+      try { sceneMap = (await api('/api/lab-config')).map || {}; } catch (e) {}
+      base('dormant');
       if (!sessionStorage.getItem('lab_intro')) {
         sessionStorage.setItem('lab_intro', '1');
         this.event('intro');
       }
     },
-    // Joue une micro-scène par-dessus la boucle. Ignorée si une scène plus
-    // prioritaire est en cours, ou si elle a déjà joué récemment (cooldown).
     event(name) {
       const cfg = EVENTS[name];
       if (!cfg || reduced || !vEvent) return;
@@ -1402,6 +1481,7 @@ const Lab = (() => {
       lastPlayed[name] = now;
       playing = { name };
       if (name === 'birth') document.body.classList.add('lab-birth');
+      LabAudio.cue(name);
       setSources(vEvent, name);
       vEvent.loop = false;
       vEvent.onended = endEvent;
@@ -1410,15 +1490,15 @@ const Lab = (() => {
         if (!playing || playing.name !== name) return;
         vEvent.play().then(() => vEvent.classList.add('on')).catch(endEvent);
       }, { once: true });
-      // Garde-fou : si la vidéo n'existe pas / ne charge pas, on libère
       setTimeout(() => { if (playing && playing.name === name && vEvent.currentTime === 0) endEvent(); }, 6000);
-      // Accent lumineux immédiat (le temps que la vidéo arrive)
       const colors = { email: 'rgba(120,220,255,.18)', password: 'rgba(87,217,194,.25)',
                        account: 'rgba(255,205,120,.35)', name: 'rgba(150,230,255,.2)',
                        sub: 'rgba(200,220,255,.16)', deploy: 'rgba(255,180,90,.22)',
-                       birth: 'rgba(255,210,120,.45)', intro: 'rgba(120,220,255,.12)' };
-      pulse(colors[name] || 'rgba(120,220,255,.15)', name === 'birth' ? 1800 : 900);
+                       birth: 'rgba(255,210,120,.45)', delete: 'rgba(255,120,80,.4)',
+                       intro: 'rgba(120,220,255,.12)' };
+      pulse(colors[name] || 'rgba(120,220,255,.15)', (name === 'birth' || name === 'delete') ? 1800 : 900);
     },
+    base,
     surge(level) {
       const colors = ['rgba(120,220,255,.20)', 'rgba(120,220,255,.30)', 'rgba(255,205,120,.34)'];
       pulse(colors[Math.min(level, 3) - 1] || colors[0], 700 + level * 250);
@@ -1432,16 +1512,90 @@ const Lab = (() => {
     },
     flicker(on) { if (!reduced && scene) scene.classList.toggle('flicker', on); },
     alive(withCinematic) {
-      if (isAlive || reduced || !vAlive) { isAlive = true; return; }
-      isAlive = true;
-      if (withCinematic) this.event('birth');
-      loadLoop(vAlive, 'alive', (v) => v.play().then(() => {
-        v.classList.add('on');
-        if (vDormant) vDormant.classList.remove('on');
-      }).catch(() => {}));
+      if (reduced) return;
+      if (withCinematic && currentBase !== 'alive') this.event('birth');
+      else base('alive');
     },
   };
 })();
+
+// ══ L'AMBIANCE SONORE (WebAudio procédural — aucun fichier à charger) ══
+// Bourdonnement grave de machinerie + souffle de ventilation + relais et
+// gouttes aléatoires ; accents discrets sur les grandes scènes. Respecte
+// l'autoplay (démarre au premier geste), bouton muet, préférence mémorisée.
+const LabAudio = (() => {
+  let ctx = null, master = null, started = false;
+  let enabled = localStorage.getItem('lab_sound') !== '0';
+
+  function build() {
+    ctx = new (window.AudioContext || window.webkitAudioContext)();
+    master = ctx.createGain(); master.gain.value = enabled ? 0.14 : 0; master.connect(ctx.destination);
+    for (const [f, g] of [[50, .5], [100, .18], [149.5, .07]]) {
+      const o = ctx.createOscillator(), og = ctx.createGain();
+      o.type = 'sine'; o.frequency.value = f; og.gain.value = g;
+      o.connect(og); og.connect(master); o.start();
+    }
+    const len = ctx.sampleRate * 2, buf = ctx.createBuffer(1, len, ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    let last = 0;
+    for (let i = 0; i < len; i++) { const w = Math.random() * 2 - 1; last = (last + 0.02 * w) / 1.02; d[i] = last * 3; }
+    const noise = ctx.createBufferSource(); noise.buffer = buf; noise.loop = true;
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 220;
+    const ng = ctx.createGain(); ng.gain.value = .5;
+    noise.connect(lp); lp.connect(ng); ng.connect(master); noise.start();
+    (function tick() {
+      if (!ctx) return;
+      const t = ctx.currentTime + 2 + Math.random() * 9;
+      const o = ctx.createOscillator(), og = ctx.createGain();
+      const drip = Math.random() < .45;
+      o.type = drip ? 'sine' : 'square';
+      o.frequency.value = drip ? 900 + Math.random() * 600 : 55 + Math.random() * 25;
+      og.gain.setValueAtTime(0, t);
+      og.gain.linearRampToValueAtTime(drip ? .05 : .09, t + .006);
+      og.gain.exponentialRampToValueAtTime(.0001, t + (drip ? .09 : .05));
+      o.connect(og); og.connect(master);
+      o.start(t); o.stop(t + .15);
+      setTimeout(tick, (t - ctx.currentTime + .3) * 1000);
+    })();
+  }
+
+  function start() {
+    if (started) return; started = true;
+    try { build(); } catch (e) { /* WebAudio indisponible */ }
+    updateBtn();
+  }
+
+  function updateBtn() {
+    const b = $('sound-btn');
+    if (b) { b.textContent = enabled ? '🔊' : '🔇'; b.title = enabled ? 'Couper le son' : 'Activer le son'; }
+  }
+
+  return {
+    arm() {
+      updateBtn();
+      const go = () => start();
+      window.addEventListener('pointerdown', go, { once: true });
+      window.addEventListener('keydown', go, { once: true });
+    },
+    toggle() {
+      enabled = !enabled;
+      localStorage.setItem('lab_sound', enabled ? '1' : '0');
+      if (!started) start();
+      if (master && ctx) master.gain.linearRampToValueAtTime(enabled ? 0.14 : 0, ctx.currentTime + .4);
+      updateBtn();
+    },
+    cue(name) {
+      if (!ctx || !master || !enabled) return;
+      const t = ctx.currentTime;
+      const peak = { birth: .3, delete: .3, account: .24, deploy: .2 }[name] || .18;
+      master.gain.cancelScheduledValues(t);
+      master.gain.setValueAtTime(master.gain.value, t);
+      master.gain.linearRampToValueAtTime(peak, t + .4);
+      master.gain.linearRampToValueAtTime(.14, t + 2.6);
+    },
+  };
+})();
+LabAudio.arm();
 Lab.init();
 
 // ── Le câblage du rituel : une réaction par interaction ─────────────
@@ -1476,10 +1630,10 @@ function labSyncTenants(list) {
   for (const a of list || []) {
     const prev = labPrevStatus[a.id];
     if (prev && prev !== a.status) {
-      // Paiement accepté → la NAISSANCE (cinématique longue) accompagne le
-      // déploiement Docker ; à « running », la boucle vie prend le relais.
-      if (a.status === 'pending' || a.status === 'deploying') Lab.event('birth');
-      if (a.status === 'running') Lab.alive(false);
+      // Paiement accepté → boucle « déploiement » (l'énergie circule) pendant
+      // que Docker travaille ; à « running » → la NAISSANCE, puis la vie.
+      if (a.status === 'pending' || a.status === 'deploying') Lab.base('deploying');
+      if (a.status === 'running') Lab.alive(true);
     }
     labPrevStatus[a.id] = a.status;
     if (a.status === 'running' && !(a.hosting && a.hosting.suspended)) anyRunning = true;

@@ -256,6 +256,57 @@ def update_pricing(
     return result
 
 
+# ── Scènes du laboratoire (pilotage admin des animations) ───────────
+# L'admin associe chaque interaction (survol, saisie, achat…) à un fichier
+# vidéo de /static — et peut en changer mois après mois sans redéployer.
+
+LAB_SCENES_KEY = "lab_scene_map"
+LAB_TRIGGERS = (
+    "intro", "dormant", "email", "password", "account", "name", "sub",
+    "deploy", "deploying", "birth", "alive", "delete",
+)
+
+
+@router.get("/api/lab-config")
+def lab_config(db: Session = Depends(get_db)):
+    """Mapping interaction → nom de scène (public — lu par le moteur du front).
+    Par défaut chaque déclencheur utilise `lab-<déclencheur>`."""
+    import json as _json
+    row = db.get(Setting, LAB_SCENES_KEY)
+    overrides = {}
+    if row and row.value.strip():
+        try:
+            overrides = _json.loads(row.value)
+        except Exception:
+            overrides = {}
+    return {"map": {t: overrides.get(t, f"lab-{t}") for t in LAB_TRIGGERS}}
+
+
+class LabConfigUpdate(BaseModel):
+    map: dict[str, str]
+
+
+@router.put("/api/admin/lab-config")
+def update_lab_config(body: LabConfigUpdate, admin: User = Depends(require_admin),
+                      db: Session = Depends(get_db)):
+    """Enregistre le mapping scène par interaction. Noms de fichiers (sans
+    extension) limités à [a-z0-9-] — les fichiers .webm/.mp4 correspondants
+    sont à déposer dans app/static/."""
+    import json as _json
+    clean = {}
+    for k, v in body.map.items():
+        if k not in LAB_TRIGGERS:
+            raise HTTPException(400, f"Déclencheur inconnu : {k}")
+        v = (v or "").strip()
+        if v and not re.match(r"^[a-z0-9-]+$", v):
+            raise HTTPException(400, f"Nom de scène invalide pour {k} (a-z, 0-9, tirets)")
+        if v:
+            clean[k] = v
+    _upsert_setting(db, LAB_SCENES_KEY, _json.dumps(clean))
+    db.commit()
+    return lab_config(db)
+
+
 def _upsert_setting(db: Session, key: str, value: str) -> None:
     row = db.get(Setting, key)
     if row:
