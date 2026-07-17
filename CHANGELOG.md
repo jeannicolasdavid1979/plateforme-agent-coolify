@@ -3,6 +3,21 @@
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/).
 Les dates suivent l'ordre de développement.
 
+## [Non publié — branche de test] — L'Atelier complet : 10 scènes, une par interaction
+
+### Ajouté
+- **Les 10 scènes de l'atelier** (toutes générées depuis le plan-maître unique,
+  1280×720, WebM VP9 + MP4 H.264, chargées à la demande) :
+  arrivée (néons qui s'allument difficilement), boucle ambiante, survol email
+  (CRT + code vert), survol mot de passe (tubes turquoise en surtension),
+  compte créé (pompe qui bat, grosse scène), survol nom d'agent (orbe
+  quantique), survol sous-domaine (manomètres + vapeur), survol Déployer
+  (grésillement, suspense), NAISSANCE 10 s (voile et interface effacés,
+  lignes Tron dorées sur l'armure), boucle vie (câbles relâchés, tête qui
+  scrute, particule dorée).
+- Séquence vérifiée en navigateur de bout en bout : intro → sommeil →
+  micro-scènes au survol → compte créé → naissance → vie.
+
 ## [Non publié — branche de test] — Le Laboratoire : expérience narrative
 
 ### Ajouté
