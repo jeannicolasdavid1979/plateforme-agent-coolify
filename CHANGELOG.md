@@ -3,6 +3,32 @@
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/).
 Les dates suivent l'ordre de développement.
 
+## [Non publié — branche de test] — L'admin devient un poste de pilotage
+
+### Ajouté
+- **Fiches scènes complètes** (« Scènes & interactions ») : pour chacun des 12
+  nœuds — vignette avec LECTURE de la vidéo active, élément déclencheur exact,
+  événement précis (survol / focus / Entrée / succès serveur / transition
+  d'état), plans de référence (A→A, A→B, B→B, B→A), type (boucle/one-shot),
+  fichier actif modifiable, et TEMPLATE DE PROMPT copiable + contraintes de
+  raccord communes — pour régénérer une scène ou changer tout le décor en
+  restant raccord. Lien direct Higgsfield.
+- **Supervision** : tuiles (comptes, en ligne <5 min, agents actifs, paniers
+  abandonnés, revenu total, conversion), santé serveur CPU/RAM/disque avec
+  seuils colorés et conseil d'upgrade Hetzner, table clients triée par CA
+  (🟢 en ligne, payé/crédit, paniers abandonnés, dernière visite — nouveau
+  champ users.last_seen rafraîchi au plus 1×/min).
+- **Outils externes** : Higgsfield, Stripe, Coolify, Hetzner, OpenRouter.
+- **Réseaux sociaux** : liens gérés en admin (YouTube, X, Instagram, TikTok,
+  LinkedIn, Facebook), affichés aussitôt dans le pied de page public.
+- **Réactions supplémentaires** : déconnexion → tout s'éteint puis l'atelier se
+  rallume (intro rejouée) ; connexion réussie → scanner vert ; touche Entrée
+  dans email/mot de passe → validation.
+- **Header transparent** en pastilles — le visage d'Hermès n'est plus masqué.
+- 🦉 **Easter egg** : Bibli, la chouette de cuivre du premier plan-maître,
+  vit désormais dans l'interface — triple-clic sur HERMES pour l'appeler
+  (et un salut dans la console).
+
 ## [Non publié — branche de test] — L'Atelier complet : 10 scènes, une par interaction
 
 ### Ajouté

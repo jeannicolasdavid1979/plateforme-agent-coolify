@@ -31,6 +31,9 @@ class User(Base):
 
     # Vérification d'e-mail & réinitialisation de mot de passe
     email_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Supervision : dernière activité (mise à jour au plus 1×/min par requête
+    # authentifiée) — permet « qui est en ligne » dans l'admin.
+    last_seen: Mapped[datetime | None] = mapped_column(nullable=True)
     verification_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
     reset_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
     reset_expires: Mapped[datetime | None] = mapped_column(nullable=True)

@@ -307,6 +307,174 @@ def update_lab_config(body: LabConfigUpdate, admin: User = Depends(require_admin
     return lab_config(db)
 
 
+@router.get("/api/admin/lab-scenes")
+def lab_scenes(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Fiches complètes des scènes pour l'admin : déclencheur exact, plans de
+    référence, template de prompt (contraintes de raccord incluses), fichier
+    actif. La source de vérité pour régénérer ou changer de décor."""
+    from .lab_scenes import PROMPT_RULES, SCENES
+    current = lab_config(db)["map"]
+    return {
+        "prompt_rules": PROMPT_RULES,
+        "scenes": [
+            {"trigger": t, "file": current.get(t, f"lab-{t}"), **meta}
+            for t, meta in SCENES.items()
+        ],
+    }
+
+
+# ── Supervision (l'essence de l'admin : tout voir, tout savoir) ──────
+
+
+@router.get("/api/admin/overview")
+def admin_overview(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Vue d'ensemble : clients (en ligne, crédits, dépenses, paniers
+    abandonnés), agents et revenus — les fondamentaux de la gestion."""
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    users = db.scalars(select(User).order_by(User.created_at.desc())).all()
+    tenants = db.scalars(select(Tenant)).all()
+    paid = db.scalars(select(Checkout).where(Checkout.status == "paid")).all()
+
+    by_user_tenants: dict[str, list] = {}
+    for t in tenants:
+        by_user_tenants.setdefault(t.user_id, []).append(t)
+    by_user_paid: dict[str, list] = {}
+    for c in paid:
+        by_user_paid.setdefault(c.user_id, []).append(c)
+
+    def _aware(dt):
+        return dt.replace(tzinfo=timezone.utc) if dt and not dt.tzinfo else dt
+
+    clients = []
+    for u in users:
+        uts = by_user_tenants.get(u.id, [])
+        ups = by_user_paid.get(u.id, [])
+        seen = _aware(u.last_seen)
+        clients.append({
+            "email": u.email,
+            "is_admin": u.is_admin,
+            "verified": u.email_verified,
+            "created_at": u.created_at.isoformat() if u.created_at else None,
+            "last_seen": seen.isoformat() if seen else None,
+            "online": bool(seen and (now - seen) < timedelta(minutes=5)),
+            "agents": len(uts),
+            "agents_running": sum(1 for t in uts if t.status == "running"),
+            "abandoned": sum(1 for t in uts if t.status == "awaiting_payment"),
+            "total_paid_eur": round(sum(c.amount_eur for c in ups), 2),
+            "total_credited_eur": round(sum(c.credit_eur for c in ups), 2),
+            "balance_eur": round(sum(t.balance_eur or 0 for t in uts), 2),
+        })
+    # Les plus gros consommateurs d'abord ; paniers abandonnés bien visibles
+    clients.sort(key=lambda c: -c["total_paid_eur"])
+
+    revenue_by_kind: dict[str, float] = {}
+    for c in paid:
+        revenue_by_kind[c.kind] = round(revenue_by_kind.get(c.kind, 0) + c.amount_eur, 2)
+    buyers = {c.user_id for c in paid}
+    return {
+        "clients": clients,
+        "stats": {
+            "accounts": len(users),
+            "online_now": sum(1 for c in clients if c["online"]),
+            "agents_total": len(tenants),
+            "agents_running": sum(1 for t in tenants if t.status == "running"),
+            "agents_suspended": sum(1 for t in tenants if t.suspended_at is not None),
+            "abandoned_carts": sum(1 for t in tenants if t.status == "awaiting_payment"),
+            "revenue_total_eur": round(sum(c.amount_eur for c in paid), 2),
+            "revenue_by_kind": revenue_by_kind,
+            # Conversion : comptes qui sont allés au bout du passage à l'action
+            "conversion_pct": round(100 * len(buyers) / len(users), 1) if users else 0.0,
+        },
+    }
+
+
+@router.get("/api/admin/system")
+def admin_system(admin: User = Depends(require_admin)):
+    """Santé du serveur : CPU, RAM, disque — avec seuils. `advice` passe à
+    warning/critical quand il est temps d'envisager un plan Hetzner supérieur."""
+    import os as _os
+    import shutil
+
+    def level(pct):
+        return "critical" if pct >= 90 else "warning" if pct >= 75 else "ok"
+
+    cores = _os.cpu_count() or 1
+    load1, load5, load15 = _os.getloadavg()
+    cpu_pct = round(100 * load5 / cores, 1)
+
+    mem_total = mem_avail = 0
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemTotal:"):
+                    mem_total = int(line.split()[1]) * 1024
+                elif line.startswith("MemAvailable:"):
+                    mem_avail = int(line.split()[1]) * 1024
+    except OSError:
+        pass
+    mem_pct = round(100 * (mem_total - mem_avail) / mem_total, 1) if mem_total else 0.0
+
+    du = shutil.disk_usage("/")
+    disk_pct = round(100 * du.used / du.total, 1)
+
+    worst = max(cpu_pct, mem_pct, disk_pct)
+    return {
+        "cpu": {"cores": cores, "load": [round(load1, 2), round(load5, 2), round(load15, 2)],
+                "pct": cpu_pct, "level": level(cpu_pct)},
+        "memory": {"total_gb": round(mem_total / 1e9, 1), "used_pct": mem_pct, "level": level(mem_pct)},
+        "disk": {"total_gb": round(du.total / 1e9, 1), "free_gb": round(du.free / 1e9, 1),
+                 "used_pct": disk_pct, "level": level(disk_pct)},
+        "advice": ("Envisagez un plan Hetzner supérieur (CPU/RAM/disque saturés)."
+                   if worst >= 90 else
+                   "Surveillez la charge — un upgrade Hetzner sera bientôt utile."
+                   if worst >= 75 else "Capacité serveur confortable."),
+        "advice_level": level(worst),
+    }
+
+
+# ── Réseaux sociaux (footer public, gérés par l'admin) ───────────────
+
+SOCIAL_KEYS = ("youtube", "x", "instagram", "tiktok", "linkedin", "facebook")
+
+
+@router.get("/api/social")
+def social_links(db: Session = Depends(get_db)):
+    """Liens sociaux publics (affichés dans le pied de page du site)."""
+    import json as _json
+    row = db.get(Setting, "social_links")
+    links = {}
+    if row and row.value.strip():
+        try:
+            links = _json.loads(row.value)
+        except Exception:
+            links = {}
+    return {"links": {k: links.get(k, "") for k in SOCIAL_KEYS}}
+
+
+class SocialUpdate(BaseModel):
+    links: dict[str, str]
+
+
+@router.put("/api/admin/social")
+def update_social(body: SocialUpdate, admin: User = Depends(require_admin),
+                  db: Session = Depends(get_db)):
+    import json as _json
+    clean = {}
+    for k, v in body.links.items():
+        if k not in SOCIAL_KEYS:
+            raise HTTPException(400, f"Réseau inconnu : {k}")
+        v = (v or "").strip()
+        if v and not v.startswith("https://"):
+            raise HTTPException(400, f"Le lien {k} doit commencer par https://")
+        if v:
+            clean[k] = v
+    _upsert_setting(db, "social_links", _json.dumps(clean))
+    db.commit()
+    return social_links(db)
+
+
 def _upsert_setting(db: Session, key: str, value: str) -> None:
     row = db.get(Setting, key)
     if row:

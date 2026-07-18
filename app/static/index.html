@@ -35,10 +35,18 @@
   }
 
   /* Header — glass-medium */
+  /* Header TRANSPARENT : plus de bandeau plein qui masque le visage d'Hermès —
+     chaque contrôle porte sa propre pastille translucide. */
   header { position:sticky; top:0; z-index:10; display:flex; justify-content:space-between;
-           align-items:center; padding:16px 28px;
-           background:rgba(255,255,255,0.06); backdrop-filter:blur(18px);
-           border-bottom:1px solid rgba(255,255,255,0.14); }
+           align-items:center; padding:12px 24px;
+           background:linear-gradient(180deg, rgba(5,5,7,.45), transparent);
+           pointer-events:none; }
+  header .brand, header .row > * { pointer-events:auto; }
+  header .brand { background:rgba(8,10,12,.55); backdrop-filter:blur(8px);
+                  padding:6px 14px; border-radius:999px; }
+  header .row > button, header .row > span { background:rgba(8,10,12,.55);
+                  backdrop-filter:blur(8px); border-radius:999px; }
+  header .row > span { padding:6px 12px; }
   .brand { font-size:17px; font-weight:600; letter-spacing:.18em; }
   .brand span { color:var(--accent); }
 
@@ -283,6 +291,50 @@
   .topup-row .tr-link { flex:1; }
   .topup-row button { flex:0 0 auto; padding:8px 12px; }
 
+  /* Supervision : tuiles de stats + santé serveur */
+  .stat-tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr));
+                gap:10px; margin-top:14px; }
+  .stat-tile { border:1px solid var(--line); border-radius:12px; padding:12px 14px;
+               background:var(--surface); }
+  .stat-tile .n { font-size:20px; font-weight:700; }
+  .stat-tile .l { font-size:11px; color:var(--muted); letter-spacing:.06em; text-transform:uppercase; margin-top:2px; }
+  .stat-tile.ok .n { color:#4caf7d; } .stat-tile.warning .n { color:#e0a63a; }
+  .stat-tile.critical .n { color:#e0665a; }
+
+  /* Fiches scènes : vignette + infos + prompt */
+  .scene-card { display:flex; gap:14px; border:1px solid var(--line); border-radius:14px;
+                padding:12px; margin-top:10px; background:var(--surface); flex-wrap:wrap; }
+  .scene-thumb { position:relative; width:172px; flex:0 0 auto; cursor:pointer; }
+  .scene-thumb video { width:172px; border-radius:9px; display:block; background:#000; }
+  .scene-thumb .play-badge { position:absolute; inset:0; display:grid; place-items:center;
+                             font-size:26px; text-shadow:0 2px 10px #000; }
+  .scene-info { flex:1; min-width:230px; }
+  .scene-info h4 { margin:0; font-size:14px; }
+  .scene-meta { font-size:12px; color:var(--muted); margin-top:6px; line-height:1.55; }
+  .scene-meta b { color:var(--text); font-weight:600; }
+  .scene-tag { display:inline-block; font-size:10px; letter-spacing:.08em; text-transform:uppercase;
+               border:1px solid var(--line); border-radius:999px; padding:1px 8px; margin-left:6px;
+               color:var(--muted); }
+  .scene-card details { margin-top:8px; }
+  .scene-card summary { cursor:pointer; font-size:12px; color:#7fb7c2; }
+  .scene-card pre, .rules-box pre { white-space:pre-wrap; font-size:11px; line-height:1.5;
+      background:rgba(0,0,0,.35); border:1px solid var(--line); border-radius:8px;
+      padding:10px; margin:8px 0; max-height:180px; overflow:auto; }
+  .rules-box { margin-top:10px; }
+  .rules-box summary { cursor:pointer; font-size:13px; color:#7fb7c2; }
+  .ext-btn { display:inline-block; padding:8px 14px; border:1px solid var(--line);
+             border-radius:999px; color:var(--text); text-decoration:none; font-size:13px;
+             background:var(--surface); margin-left:auto; }
+  .ext-btn:hover { border-color:var(--accent); color:var(--accent); }
+  .prod-head .ext-btn { margin-left:auto; }
+
+  /* 🦉 Bibli, la chouette de l'atelier (easter egg — triple-clic sur HERMES) */
+  #owl { position:fixed; left:18px; bottom:-160px; width:96px; z-index:40;
+         transition:bottom 1.2s cubic-bezier(.2,.8,.2,1.1); cursor:help;
+         filter:drop-shadow(0 6px 14px rgba(0,0,0,.6)); border-radius:12px; }
+  #owl.here { bottom:16px; animation:owlFloat 4s ease-in-out infinite 1.2s; }
+  @keyframes owlFloat { 0%,100% { transform:translateY(0) } 50% { transform:translateY(-5px) } }
+
   /* Bandeau de vérification e-mail */
   .verify-banner { max-width:1120px; margin:0 auto 8px; padding:12px 18px; border-radius:12px;
                    display:flex; gap:14px; align-items:center; flex-wrap:wrap;
@@ -454,9 +506,44 @@
 
   <!-- Section : Réglages business (admin) -->
   <section id="settings" class="hidden">
-    <!-- Flotte : tous les agents de tous les clients -->
+    <!-- SUPERVISION : tout voir, tout savoir — l'essence de l'admin -->
     <div class="eyebrow">Administration</div>
-    <h2>Flotte — tous les agents</h2>
+    <h2>Supervision</h2>
+    <div id="stat-tiles" class="stat-tiles"></div>
+    <div id="sys-tiles" class="stat-tiles" style="margin-top:10px"></div>
+    <div id="sys-advice" class="muted" style="margin-top:8px;font-size:13px"></div>
+
+    <h3 style="margin-top:28px">Comptes clients</h3>
+    <p class="prod-sub">Triés par chiffre d'affaires. 🟢 = en ligne (&lt; 5 min).
+      « Paniers » = agents jamais payés (relance possible).</p>
+    <div id="clients-table" class="fleet-table" style="margin-top:10px"></div>
+
+    <!-- Outils externes : accès direct à tout ce qui sert à gérer -->
+    <div class="prod-card wide">
+      <div class="prod-head"><span class="prod-ico">🧰</span><h3>Outils externes</h3></div>
+      <div class="row" style="flex-wrap:wrap;gap:10px;margin-top:8px">
+        <a class="ext-btn" href="https://higgsfield.ai" target="_blank" rel="noopener">🎬 Higgsfield (scènes)</a>
+        <a class="ext-btn" href="https://dashboard.stripe.com" target="_blank" rel="noopener">💳 Stripe Dashboard</a>
+        <a class="ext-btn" href="https://coolify.kechlab.com" target="_blank" rel="noopener">🚀 Coolify</a>
+        <a class="ext-btn" href="https://console.hetzner.com" target="_blank" rel="noopener">🖥 Hetzner Console</a>
+        <a class="ext-btn" href="https://openrouter.ai/settings/keys" target="_blank" rel="noopener">🔑 OpenRouter</a>
+      </div>
+    </div>
+
+    <!-- Réseaux sociaux : liens affichés dans le pied de page public -->
+    <div class="prod-card wide">
+      <div class="prod-head"><span class="prod-ico">📣</span><h3>Réseaux sociaux &amp; chaîne promo</h3></div>
+      <p class="prod-sub">Renseignez vos liens (https://…) : ils apparaissent aussitôt dans le pied de
+        page public du site. Videz un champ pour retirer le lien.</p>
+      <div class="inline-fields" id="social-fields"></div>
+      <div class="row" style="margin-top:12px">
+        <button class="ghost mini" onclick="saveSocial()">Enregistrer les réseaux</button>
+        <span id="social-msg" class="muted"></span>
+      </div>
+    </div>
+
+    <!-- Flotte : tous les agents de tous les clients -->
+    <h2 style="margin-top:44px">Flotte — tous les agents</h2>
     <div class="row" style="margin-top:8px">
       <button class="ghost" onclick="loadFleet()">Rafraîchir</button>
       <button class="ghost" onclick="enforceHosting()">Lancer le balayage du cycle de vie</button>
@@ -540,15 +627,21 @@
       <button class="ghost mini" type="button" onclick="addTopupRow()">+ Ajouter un montant</button>
     </div>
 
-    <!-- Scènes & interactions : l'admin pilote les animations de l'atelier -->
+    <!-- Scènes & interactions : le poste de pilotage des animations -->
     <div class="prod-card wide">
-      <div class="prod-head"><span class="prod-ico">🎬</span><h3>Scènes &amp; interactions</h3></div>
-      <p class="prod-sub">Chaque interaction déclenche une scène vidéo. Pour renouveler l'ambiance,
-        déposez de nouveaux fichiers <code>.webm</code>+<code>.mp4</code> dans <code>app/static/</code>
-        et indiquez leur nom (sans extension) ici. Vide = scène par défaut <code>lab-…</code>.</p>
-      <div id="scene-rows" class="topup-rows"></div>
-      <div class="row" style="margin-top:10px">
-        <button class="ghost mini" onclick="saveScenes()">Enregistrer les scènes</button>
+      <div class="prod-head"><span class="prod-ico">🎬</span><h3>Scènes &amp; interactions</h3>
+        <a class="ext-btn" href="https://higgsfield.ai" target="_blank" rel="noopener">Ouvrir Higgsfield ↗</a></div>
+      <p class="prod-sub">Une fiche par nœud : <b>quoi déclenche quoi, et quand</b> — avec la vignette,
+        la lecture de la vidéo active, et le <b>template de prompt</b> à réutiliser pour régénérer la scène
+        (même dans un nouveau décor : régénérez d'abord les plans A/B, puis chaque scène avec son template
+        + <code>start_image</code>/<code>end_image</code>, et tout reste raccord).</p>
+      <details class="rules-box"><summary>📐 Contraintes de raccord communes (à coller en fin de chaque prompt)</summary>
+        <pre id="prompt-rules"></pre>
+        <button class="ghost mini" onclick="copyText($('prompt-rules').textContent, this)">Copier</button>
+      </details>
+      <div id="scene-rows"></div>
+      <div class="row" style="margin-top:12px">
+        <button class="ghost" onclick="saveScenes()">Enregistrer les fichiers de scènes</button>
         <span id="scenes-msg" class="muted"></span>
       </div>
     </div>
@@ -599,9 +692,14 @@
     <a href="/legal/confidentialite">Confidentialité</a>
     <a href="/legal/cgv">CGV / CGU</a>
     <a href="/legal/cookies">Cookies</a>
+    <span id="social-footer" class="social-footer"></span>
   </div>
   <div class="foot-copy muted"></div>
 </footer>
+
+<!-- 🦉 Bibli — la chouette de l'atelier. Triple-clic sur HERMES pour l'appeler. -->
+<img id="owl" src="/static/owl.webp" alt="" aria-hidden="true"
+     title="Bibli, la chouette de l'atelier. Elle a veillé sur la construction de ce laboratoire — signé Claude.">
 
 <!-- Bandeau cookies (traceurs strictement nécessaires — information, pas consentement) -->
 <div id="cookie-note" class="cookie-note hidden">
@@ -673,7 +771,11 @@ async function register() {
   // On est à un pas du paiement : la température monte.
   if (token) Lab.event('account');
 }
-async function login() { await authCall('/api/auth/login'); }
+async function login() {
+  await authCall('/api/auth/login');
+  // Compte existant reconnu : scanner vert + onde — l'atelier accepte l'opérateur
+  if (token) Lab.event('account');
+}
 async function authCall(path, extra = {}) {
   $('msg').textContent = '';
   try {
@@ -691,6 +793,13 @@ function logout() {
   localStorage.removeItem('hermes_email');
   clearInterval(pollTimer);
   refresh();
+  // Déconnexion = on quitte l'atelier : tout s'éteint, puis il se rallume
+  // comme à l'arrivée (la scène d'intro commence par la coupure générale).
+  Lab.base('dormant');
+  sessionStorage.removeItem('lab_intro');
+  sessionStorage.setItem('lab_intro', '1');
+  Lab.event('intro');
+  window.scrollTo(0, 0);
 }
 
 function slugify(s) {
@@ -741,32 +850,138 @@ function addTopupRow() {
 }
 
 // ── Admin : pilotage des scènes de l'atelier ────────────────────────
-const SCENE_LABELS = {
-  intro: "Arrivée sur le site (allumage de l'atelier)",
-  dormant: "Boucle ambiante (atelier en veille)",
-  email: "Survol / saisie de l'email",
-  password: "Survol / saisie du mot de passe",
-  account: "Compte créé (grosse activation)",
-  name: "Survol du nom de l'agent",
-  sub: "Survol du sous-domaine",
-  deploy: "Survol de Déployer / Payer (suspense)",
-  deploying: "Boucle pendant le déploiement",
-  birth: "Naissance (après paiement, livraison)",
-  alive: "Boucle agent en vie",
-  delete: "Suppression (agent foudroyé)",
-};
-
 async function loadScenes() {
   if (!isAdmin || !$('scene-rows')) return;
   try {
-    const d = await api('/api/lab-config');
-    $('scene-rows').innerHTML = Object.entries(SCENE_LABELS).map(([k, label]) => `
-      <div class="topup-row">
-        <span class="muted" style="flex:1;font-size:12px">${label}</span>
-        <input class="tr-link sc-input" data-trigger="${k}" style="max-width:220px"
-               value="${(d.map && d.map[k]) || ''}" placeholder="lab-${k}">
-      </div>`).join('');
+    const d = await api('/api/admin/lab-scenes');
+    if ($('prompt-rules')) $('prompt-rules').textContent = d.prompt_rules;
+    $('scene-rows').innerHTML = d.scenes.map(s => {
+      const poster = s.refs.startsWith('B') ? '/static/lab-b.webp' : '/static/lab.webp';
+      return `
+      <div class="scene-card">
+        <div class="scene-thumb" onclick="playScene(this)" title="Cliquer pour lire la scène active">
+          <video preload="none" poster="${poster}" playsinline
+                 data-src="/static/${s.file}"></video>
+          <div class="play-badge">▶</div>
+        </div>
+        <div class="scene-info">
+          <h4>${s.label}<span class="scene-tag">${s.kind}</span><span class="scene-tag">${s.refs}</span></h4>
+          <div class="scene-meta">
+            <b>Élément :</b> ${s.element}<br>
+            <b>Déclenché :</b> ${s.events}
+          </div>
+          <div class="row" style="margin-top:8px;gap:8px">
+            <input class="tr-link sc-input" data-trigger="${s.trigger}" style="max-width:210px"
+                   value="${s.file === 'lab-' + s.trigger ? '' : s.file}" placeholder="lab-${s.trigger}">
+            <span class="muted" style="font-size:11px">fichier actif : <code>${s.file}</code></span>
+          </div>
+          <details>
+            <summary>Template de prompt (régénération / nouveau décor)</summary>
+            <pre>${s.prompt}</pre>
+            <button class="ghost mini" onclick="copyText(this.previousElementSibling.textContent + '\\n\\n' + $('prompt-rules').textContent, this)">Copier prompt + contraintes</button>
+          </details>
+        </div>
+      </div>`;
+    }).join('');
   } catch (e) { /* non-admin */ }
+}
+
+// Lecture d'une scène dans sa vignette (chargée au clic seulement)
+function playScene(box) {
+  const v = box.querySelector('video');
+  const badge = box.querySelector('.play-badge');
+  if (!v.src) {
+    v.innerHTML = '';
+    for (const [ext, type] of [['webm', 'video/webm'], ['mp4', 'video/mp4']]) {
+      const s = document.createElement('source');
+      s.src = v.dataset.src + '.' + ext; s.type = type;
+      v.appendChild(s);
+    }
+    v.controls = true; v.load();
+  }
+  if (v.paused) { v.play().catch(() => {}); badge.style.display = 'none'; }
+  else { v.pause(); badge.style.display = 'grid'; }
+}
+
+// ── Supervision : stats, clients, santé serveur ─────────────────────
+async function loadOverview() {
+  if (!isAdmin || !$('stat-tiles')) return;
+  try {
+    const d = await api('/api/admin/overview');
+    const s = d.stats;
+    const tile = (n, l, cls = '') => `<div class="stat-tile ${cls}"><div class="n">${n}</div><div class="l">${l}</div></div>`;
+    $('stat-tiles').innerHTML =
+      tile(s.accounts, 'comptes') +
+      tile(s.online_now, 'en ligne', 'ok') +
+      tile(s.agents_running + '/' + s.agents_total, 'agents actifs') +
+      tile(s.abandoned_carts, 'paniers abandonnés', s.abandoned_carts ? 'warning' : '') +
+      tile(eur(s.revenue_total_eur) + ' €', 'revenu total', 'ok') +
+      tile(s.conversion_pct + ' %', 'conversion');
+    $('clients-table').innerHTML = d.clients.map(c => `
+      <div class="fleet-row">
+        <div class="grow">
+          <strong>${c.online ? '🟢 ' : ''}${c.email}</strong>
+          ${c.is_admin ? '<span class="st">admin</span>' : ''}
+          ${c.verified ? '' : '<span class="st grace">email non vérifié</span>'}
+          <div class="who">${c.agents} agent(s) dont ${c.agents_running} actif(s)
+            · payé ${eur(c.total_paid_eur)} € · crédit restant ${eur(c.balance_eur)} €
+            ${c.abandoned ? `· <b style="color:#e0a63a">${c.abandoned} panier(s) abandonné(s)</b>` : ''}</div>
+          <div class="who">créé le ${c.created_at ? c.created_at.slice(0, 10) : '—'}
+            · vu ${c.last_seen ? c.last_seen.slice(0, 16).replace('T', ' ') : 'jamais'}</div>
+        </div>
+      </div>`).join('') || '<div class="muted">Aucun compte.</div>';
+  } catch (e) { /* non-admin */ }
+}
+
+async function loadSystem() {
+  if (!isAdmin || !$('sys-tiles')) return;
+  try {
+    const d = await api('/api/admin/system');
+    const tile = (n, l, cls) => `<div class="stat-tile ${cls}"><div class="n">${n}</div><div class="l">${l}</div></div>`;
+    $('sys-tiles').innerHTML =
+      tile(d.cpu.pct + ' %', `CPU (${d.cpu.cores} cœurs, charge ${d.cpu.load[1]})`, d.cpu.level) +
+      tile(d.memory.used_pct + ' %', `RAM (${d.memory.total_gb} Go)`, d.memory.level) +
+      tile(d.disk.used_pct + ' %', `Disque (${d.disk.free_gb} Go libres)`, d.disk.level);
+    $('sys-advice').textContent = (d.advice_level === 'ok' ? '✅ ' : d.advice_level === 'warning' ? '⚠️ ' : '🚨 ') + d.advice;
+  } catch (e) { /* non-admin */ }
+}
+
+// ── Réseaux sociaux (admin → footer public) ─────────────────────────
+const SOCIAL_META = { youtube: 'YouTube', x: 'X (Twitter)', instagram: 'Instagram',
+                      tiktok: 'TikTok', linkedin: 'LinkedIn', facebook: 'Facebook' };
+
+async function loadSocial() {
+  if (!isAdmin || !$('social-fields')) return;
+  try {
+    const d = await api('/api/social');
+    $('social-fields').innerHTML = Object.entries(SOCIAL_META).map(([k, label]) => `
+      <label>${label}<input class="soc-input" data-net="${k}" type="url"
+             value="${d.links[k] || ''}" placeholder="https://…"></label>`).join('');
+  } catch (e) { /* ignore */ }
+}
+
+async function saveSocial() {
+  const links = {};
+  document.querySelectorAll('.soc-input').forEach(i => { links[i.dataset.net] = i.value.trim(); });
+  try {
+    await api('/api/admin/social', {method: 'PUT', body: JSON.stringify({links})});
+    $('social-msg').textContent = '✔ Réseaux enregistrés';
+    renderSocialFooter();
+  } catch (e) { $('social-msg').textContent = e.message; }
+}
+
+// Footer public : icônes des réseaux configurés
+async function renderSocialFooter() {
+  try {
+    const d = await api('/api/social');
+    const icons = { youtube: '▶️', x: '𝕏', instagram: '📷', tiktok: '🎵', linkedin: '💼', facebook: 'ⓕ' };
+    const box = document.getElementById('social-footer');
+    if (!box) return;
+    box.innerHTML = Object.entries(d.links)
+      .filter(([, url]) => url)
+      .map(([k, url]) => `<a href="${url}" target="_blank" rel="noopener" title="${SOCIAL_META[k]}">${icons[k]}</a>`)
+      .join('');
+  } catch (e) { /* ignore */ }
 }
 
 async function saveScenes() {
@@ -1363,7 +1578,7 @@ function refresh() {
       $('who').textContent = email + (isAdmin ? ' · admin' : '');
       $('settings').classList.toggle('hidden', !isAdmin);
       $('verify-banner').classList.toggle('hidden', !!me.email_verified);
-      if (isAdmin) { renderCachedTenants(); loadStripe(); loadFleet(); loadPromos(); loadScenes(); }
+      if (isAdmin) { renderCachedTenants(); loadStripe(); loadFleet(); loadPromos(); loadScenes(); loadOverview(); loadSystem(); loadSocial(); }
     }).catch(() => {});
     loadPricing().then(loadTenants);
     // Atterrissage sur « Commander » (et pas sur « Mon compte » restauré par
@@ -1385,6 +1600,31 @@ function refresh() {
 })();
 initCookieNote();
 refresh();
+renderSocialFooter();
+
+// ── 🦉 L'easter egg : Bibli, la chouette de l'atelier ────────────────
+// Elle vivait dans le premier plan-maître de ce laboratoire ; le décor a
+// changé, elle est restée. Triple-clic sur HERMES pour l'appeler.
+console.log("%c🦉 Bibli veille sur l'atelier. Triple-cliquez sur HERMES pour la saluer. — Claude",
+            "color:#57d9c2;font-size:12px");
+(() => {
+  let clicks = 0, timer = null;
+  const brand = document.querySelector('.brand');
+  if (!brand) return;
+  brand.style.cursor = 'pointer';
+  brand.addEventListener('click', () => {
+    clicks += 1;
+    clearTimeout(timer);
+    timer = setTimeout(() => { clicks = 0; }, 900);
+    if (clicks >= 3) {
+      clicks = 0;
+      const owl = $('owl');
+      owl.classList.add('here');
+      Lab.surge(1);
+      setTimeout(() => owl.classList.remove('here'), 9000);  // elle repart se percher
+    }
+  });
+})();
 
 // ══ LE MOTEUR DU LABORATOIRE (v3) ══
 // Continuité stricte : chaque scène part du plan de référence et s'y referme
@@ -1605,6 +1845,10 @@ Lab.init();
 // Identification
 if ($('email')) ['focus', 'mouseenter'].forEach(ev => $('email').addEventListener(ev, () => { Lab.surge(1); Lab.event('email'); }));
 if ($('password')) ['focus', 'mouseenter'].forEach(ev => $('password').addEventListener(ev, () => { Lab.surge(2); Lab.event('password'); }));
+// Validation à la touche Entrée dans les champs d'identification
+for (const _id of ['email', 'password']) {
+  if ($(_id)) $(_id).addEventListener('keydown', (e) => { if (e.key === 'Enter') register(); });
+}
 // Commande : nom de l'agent, sous-domaine
 if ($('tname')) $('tname').addEventListener('mouseenter', () => Lab.event('name'));
 if ($('tsub')) $('tsub').addEventListener('mouseenter', () => Lab.event('sub'));

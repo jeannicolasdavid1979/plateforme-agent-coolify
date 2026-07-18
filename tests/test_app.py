@@ -1305,3 +1305,55 @@ def test_lab_scene_config_admin():
     assert client.put("/api/admin/lab-config", json={"map": {"intro": "../evil"}}, headers=admin).status_code == 400
     user = _register("scenes-user@ex.io")
     assert client.put("/api/admin/lab-config", json={"map": {}}, headers=user).status_code == 403
+
+
+def test_admin_supervision_overview_and_system():
+    """La supervision donne les fondamentaux : clients, en ligne, revenus,
+    conversion, paniers abandonnés — et la santé serveur avec seuils."""
+    admin = _admin("super-admin@ex.io")
+    headers = _register("super-client@ex.io")
+    # Un panier abandonné (agent jamais payé)…
+    client.post("/api/agents", json={"name": "Ab", "subdomain": "test-abandon"}, headers=headers)
+    # …et un achat complet
+    aid = client.post("/api/agents", json={"name": "Ok", "subdomain": "test-achete"},
+                      headers=headers).json()["agent"]["id"]
+    cid = client.post(f"/api/agents/{aid}/checkout", headers=headers).json()["checkout_url"].split("/pay/")[1]
+    client.post(f"/api/pay/{cid}")
+
+    d = client.get("/api/admin/overview", headers=admin).json()
+    row = next(c for c in d["clients"] if c["email"] == "super-client@ex.io")
+    assert row["agents"] == 2 and row["abandoned"] == 1
+    assert row["total_paid_eur"] == 29.0
+    assert row["online"] is True  # vient de faire des requêtes
+    assert d["stats"]["abandoned_carts"] >= 1
+    assert d["stats"]["revenue_total_eur"] >= 29.0
+    assert 0 < d["stats"]["conversion_pct"] <= 100
+    # Non-admin refusé
+    assert client.get("/api/admin/overview", headers=headers).status_code == 403
+
+    s = client.get("/api/admin/system", headers=admin).json()
+    assert s["cpu"]["cores"] >= 1 and s["disk"]["total_gb"] > 0
+    assert s["advice_level"] in ("ok", "warning", "critical")
+
+
+def test_social_links_roundtrip():
+    admin = _admin("social-admin@ex.io")
+    r = client.put("/api/admin/social", json={"links": {"youtube": "https://youtube.com/@hermes"}},
+                   headers=admin)
+    assert r.status_code == 200
+    assert client.get("/api/social").json()["links"]["youtube"] == "https://youtube.com/@hermes"
+    # http:// refusé, réseau inconnu refusé
+    assert client.put("/api/admin/social", json={"links": {"youtube": "http://x"}}, headers=admin).status_code == 400
+    assert client.put("/api/admin/social", json={"links": {"myspace": "https://x"}}, headers=admin).status_code == 400
+
+
+def test_lab_scenes_metadata():
+    """Les fiches scènes donnent déclencheur, plans de référence et template."""
+    admin = _admin("scenes-meta@ex.io")
+    d = client.get("/api/admin/lab-scenes", headers=admin).json()
+    assert "start_image" in d["prompt_rules"]
+    assert len(d["scenes"]) == 12
+    birth = next(s for s in d["scenes"] if s["trigger"] == "birth")
+    assert birth["refs"] == "A → B (10 s)"
+    assert "quantum core" in birth["prompt"]
+    assert birth["file"] == "lab-birth"

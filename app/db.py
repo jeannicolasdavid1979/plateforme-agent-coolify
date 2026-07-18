@@ -79,6 +79,7 @@ def init_db():
         "ALTER TABLE users ADD COLUMN verification_token VARCHAR(64)",
         "ALTER TABLE users ADD COLUMN reset_token VARCHAR(64)",
         "ALTER TABLE users ADD COLUMN reset_expires DATETIME",
+        "ALTER TABLE users ADD COLUMN last_seen DATETIME",
     ]
     with engine.connect() as conn:
         for stmt in _MIGRATIONS:

@@ -80,6 +80,13 @@ def current_user(
     if not user.is_admin and _is_admin_email(user.email):
         user.is_admin = True
         db.commit()
+    # Supervision « qui est en ligne » : last_seen rafraîchi au plus 1×/min
+    # (évite une écriture DB à chaque requête).
+    now = datetime.now(timezone.utc)
+    seen = user.last_seen.replace(tzinfo=timezone.utc) if user.last_seen and not user.last_seen.tzinfo else user.last_seen
+    if not seen or (now - seen).total_seconds() > 60:
+        user.last_seen = now
+        db.commit()
     return user
 
 
