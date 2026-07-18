@@ -379,7 +379,7 @@ plateforme-agent-coolify/
 │   ├── api.py            # REST routes: auth, agent CRUD, admin
 │   └── static/
 │       ├── index.html    # Dashboard web (design Hermes : hero, connexion, journal live)
-│       └── agent.webp    # Portrait officiel de l'agent Hermes (hero)
+│       └── lab*.webp/mp4 # Plans de référence A/B + 12 scènes de l'Atelier
 ├── design/
 │   └── DESIGN.md         # Système de direction artistique Hermes (palette, typo, motion)
 ├── tests/
