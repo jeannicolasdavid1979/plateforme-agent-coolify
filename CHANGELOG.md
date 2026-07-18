@@ -3,6 +3,29 @@
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/).
 Les dates suivent l'ordre de développement.
 
+## [Non publié — branche de test] — Vigie OpenRouter et variables assouplies
+
+### Ajouté
+- **Crédit OpenRouter en direct** : tuile « crédit restant » du compte
+  (`GET /api/v1/credits` avec la clé maître, repli sur la clé partagée),
+  seuils colorés (< 10 $ = orange, < 3 $ = rouge), consommation cumulée,
+  caché 5 min côté serveur + bouton Actualiser.
+- **Fenêtre d'alerte OpenRouter** : sonde de joignabilité de l'API + lecture
+  du flux officiel d'incidents (status.openrouter.ai/incidents.rss — il n'y a
+  pas de summary.json, vérifié). Incident de moins de 48 h non résolu ou API
+  muette → bandeau rouge en tête d'admin avec lien « suivre l'incident ».
+- **Top 10 modèles agentiques** : classement d'usage OpenRouter le plus proche
+  de l'agentique (catégorie `programming` — « agentic » n'existe pas dans leur
+  API, vérifié), restreint aux modèles qui savent appeler des outils, avec
+  contexte et prix $/M tokens (entrée/sortie).
+- **Réseaux sociaux : afficher/masquer** — un œil 👁 par réseau ; un lien
+  masqué disparaît du pied de page public mais reste conservé en admin
+  (schéma v2 `{url, visible}`, rétro-compatible avec l'ancien format).
+- **Outils externes éditables** : la liste (Higgsfield, Stripe, Coolify,
+  Hetzner, OpenRouter par défaut) devient entièrement pilotable — ajouter,
+  renommer, changer le lien, masquer, supprimer — dans l'esprit « chaque
+  variable du site doit pouvoir être éditée/masquée/supprimée ».
+
 ## [Non publié — branche de test] — L'admin devient un poste de pilotage
 
 ### Ajouté

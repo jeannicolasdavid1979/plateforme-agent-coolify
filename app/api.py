@@ -434,27 +434,64 @@ def admin_system(admin: User = Depends(require_admin)):
     }
 
 
+# ── OpenRouter : crédits, alerte statut, top modèles (admin) ─────────
+
+
+@router.get("/api/admin/openrouter")
+def admin_openrouter(refresh: int = 0, admin: User = Depends(require_admin)):
+    """Crédit disponible sur le compte OpenRouter, état de l'API (avec
+    incident en cours le cas échéant) et top 10 des modèles agentiques.
+    Caché 5 min côté serveur ; `?refresh=1` force une relecture."""
+    from .openrouter import account_snapshot
+    return account_snapshot(force=bool(refresh))
+
+
 # ── Réseaux sociaux (footer public, gérés par l'admin) ───────────────
 
 SOCIAL_KEYS = ("youtube", "x", "instagram", "tiktok", "linkedin", "facebook")
 
 
-@router.get("/api/social")
-def social_links(db: Session = Depends(get_db)):
-    """Liens sociaux publics (affichés dans le pied de page du site)."""
+def _load_social(db: Session) -> dict:
+    """Réglage normalisé au schéma v2 : {réseau: {url, visible}}.
+    Rétro-compatible avec l'ancien format {réseau: "url"} (alors visible)."""
     import json as _json
     row = db.get(Setting, "social_links")
-    links = {}
+    raw = {}
     if row and row.value.strip():
         try:
-            links = _json.loads(row.value)
+            raw = _json.loads(row.value)
         except Exception:
-            links = {}
-    return {"links": {k: links.get(k, "") for k in SOCIAL_KEYS}}
+            raw = {}
+    out = {}
+    for k in SOCIAL_KEYS:
+        v = raw.get(k)
+        if isinstance(v, str):
+            out[k] = {"url": v.strip(), "visible": True}
+        elif isinstance(v, dict):
+            out[k] = {"url": (v.get("url") or "").strip(),
+                      "visible": bool(v.get("visible", True))}
+        else:
+            out[k] = {"url": "", "visible": True}
+    return out
+
+
+@router.get("/api/social")
+def social_links(db: Session = Depends(get_db)):
+    """Liens sociaux publics : uniquement ceux renseignés ET affichés."""
+    links = _load_social(db)
+    return {"links": {k: v["url"] for k, v in links.items()
+                      if v["url"] and v["visible"]}}
+
+
+@router.get("/api/admin/social")
+def admin_social(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Vue admin complète : url + drapeau visible pour chaque réseau."""
+    return {"links": _load_social(db)}
 
 
 class SocialUpdate(BaseModel):
-    links: dict[str, str]
+    # v2 : {réseau: {url, visible}} — l'ancien format {réseau: "url"} reste accepté
+    links: dict[str, dict | str]
 
 
 @router.put("/api/admin/social")
@@ -465,14 +502,66 @@ def update_social(body: SocialUpdate, admin: User = Depends(require_admin),
     for k, v in body.links.items():
         if k not in SOCIAL_KEYS:
             raise HTTPException(400, f"Réseau inconnu : {k}")
-        v = (v or "").strip()
-        if v and not v.startswith("https://"):
+        if isinstance(v, str):
+            v = {"url": v, "visible": True}
+        url = (v.get("url") or "").strip()
+        if url and not url.startswith("https://"):
             raise HTTPException(400, f"Le lien {k} doit commencer par https://")
-        if v:
-            clean[k] = v
+        if url:
+            clean[k] = {"url": url, "visible": bool(v.get("visible", True))}
     _upsert_setting(db, "social_links", _json.dumps(clean))
     db.commit()
-    return social_links(db)
+    return {"links": _load_social(db)}
+
+
+# ── Liens outils de l'admin : éditables, masquables, supprimables ────
+
+DEFAULT_TOOL_LINKS = [
+    {"label": "🎬 Higgsfield (scènes)", "url": "https://higgsfield.ai", "visible": True},
+    {"label": "💳 Stripe Dashboard", "url": "https://dashboard.stripe.com", "visible": True},
+    {"label": "🚀 Coolify", "url": "https://coolify.kechlab.com", "visible": True},
+    {"label": "🖥 Hetzner Console", "url": "https://console.hetzner.com", "visible": True},
+    {"label": "🔑 OpenRouter", "url": "https://openrouter.ai/settings/keys", "visible": True},
+]
+
+
+@router.get("/api/admin/tool-links")
+def tool_links(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Liste des accès outils du poste de pilotage (liste par défaut au premier
+    lancement — ensuite entièrement éditable/masquable/supprimable)."""
+    import json as _json
+    row = db.get(Setting, "admin_tool_links")
+    if row and row.value.strip():
+        try:
+            links = _json.loads(row.value)
+            if isinstance(links, list):
+                return {"links": links}
+        except Exception:
+            pass
+    return {"links": DEFAULT_TOOL_LINKS}
+
+
+class ToolLinksUpdate(BaseModel):
+    links: list[dict]
+
+
+@router.put("/api/admin/tool-links")
+def update_tool_links(body: ToolLinksUpdate, admin: User = Depends(require_admin),
+                      db: Session = Depends(get_db)):
+    import json as _json
+    clean = []
+    for l in body.links:
+        label = str(l.get("label") or "").strip()
+        url = str(l.get("url") or "").strip()
+        if not label and not url:
+            continue  # ligne vide = supprimée
+        if not url.startswith("https://"):
+            raise HTTPException(400, f"Le lien « {label or url} » doit commencer par https://")
+        clean.append({"label": label or url, "url": url,
+                      "visible": bool(l.get("visible", True))})
+    _upsert_setting(db, "admin_tool_links", _json.dumps(clean, ensure_ascii=False))
+    db.commit()
+    return {"links": clean}
 
 
 def _upsert_setting(db: Session, key: str, value: str) -> None:

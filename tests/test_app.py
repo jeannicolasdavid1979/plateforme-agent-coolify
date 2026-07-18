@@ -1338,6 +1338,7 @@ def test_admin_supervision_overview_and_system():
 
 def test_social_links_roundtrip():
     admin = _admin("social-admin@ex.io")
+    # Ancien format (chaîne) toujours accepté → visible par défaut
     r = client.put("/api/admin/social", json={"links": {"youtube": "https://youtube.com/@hermes"}},
                    headers=admin)
     assert r.status_code == 200
@@ -1345,6 +1346,103 @@ def test_social_links_roundtrip():
     # http:// refusé, réseau inconnu refusé
     assert client.put("/api/admin/social", json={"links": {"youtube": "http://x"}}, headers=admin).status_code == 400
     assert client.put("/api/admin/social", json={"links": {"myspace": "https://x"}}, headers=admin).status_code == 400
+
+
+def test_social_links_show_hide():
+    """L'œil : un lien masqué disparaît du site public mais reste en admin."""
+    admin = _admin("social-eye@ex.io")
+    r = client.put("/api/admin/social", json={"links": {
+        "youtube": {"url": "https://youtube.com/@hermes", "visible": False},
+        "x": {"url": "https://x.com/hermes", "visible": True},
+    }}, headers=admin)
+    assert r.status_code == 200
+    public = client.get("/api/social").json()["links"]
+    assert "youtube" not in public and public["x"] == "https://x.com/hermes"
+    # La vue admin conserve l'URL masquée (rien n'est perdu)
+    full = client.get("/api/admin/social", headers=admin).json()["links"]
+    assert full["youtube"] == {"url": "https://youtube.com/@hermes", "visible": False}
+    assert full["x"]["visible"] is True
+
+
+def test_admin_tool_links_crud():
+    """Les outils externes : liste par défaut, puis éditable/masquable/supprimable."""
+    admin = _admin("tools-admin@ex.io")
+    d = client.get("/api/admin/tool-links", headers=admin).json()["links"]
+    assert any("Stripe" in l["label"] for l in d) and all(l["visible"] for l in d)
+
+    # On édite : un seul lien, masqué ; les lignes vides sont purgées
+    r = client.put("/api/admin/tool-links", json={"links": [
+        {"label": "🛠 Mon outil", "url": "https://exemple.com", "visible": False},
+        {"label": "", "url": "", "visible": True},
+    ]}, headers=admin)
+    assert r.status_code == 200
+    d = client.get("/api/admin/tool-links", headers=admin).json()["links"]
+    assert d == [{"label": "🛠 Mon outil", "url": "https://exemple.com", "visible": False}]
+    # http:// refusé ; non-admin refusé
+    assert client.put("/api/admin/tool-links", json={"links": [{"label": "x", "url": "http://x"}]},
+                      headers=admin).status_code == 400
+    user = _register("tools-user@ex.io")
+    assert client.get("/api/admin/tool-links", headers=user).status_code == 403
+
+
+def test_admin_openrouter_snapshot(monkeypatch):
+    """Crédit restant, alerte incident et top 10 agentique — sans toucher au réseau."""
+    from app import openrouter as orm
+
+    class FakeResp:
+        def __init__(self, status_code, payload=None, text=""):
+            self.status_code, self._payload, self.text = status_code, payload, text
+
+        def json(self):
+            return self._payload
+
+    rss = """<?xml version="1.0"?><rss><channel><item>
+      <title>Elevated API errors</title>
+      <description><![CDATA[<p><strong>INVESTIGATING</strong> - errors</p>]]></description>
+      <pubDate>{}</pubDate>
+      <link>status.openrouter.ai/incidents/abc</link></item></channel></rss>"""
+    from email.utils import format_datetime
+    from datetime import datetime, timezone
+    rss = rss.format(format_datetime(datetime.now(timezone.utc)))
+
+    def fake_get(url, **kw):
+        if url.endswith("/credits"):
+            return FakeResp(200, {"data": {"total_credits": 25.0, "total_usage": 20.5}})
+        if "incidents.rss" in url:
+            return FakeResp(200, text=rss)
+        if url.endswith("/models"):
+            return FakeResp(200, {"data": [
+                {"id": f"ai/m{i}", "name": f"Model {i}", "context_length": 200000,
+                 "supported_parameters": ["tools"],
+                 "pricing": {"prompt": "0.000001", "completion": "0.000002"}}
+                for i in range(12)
+            ] + [{"id": "ai/notool", "name": "NoTools", "supported_parameters": []}]})
+        raise AssertionError(url)
+
+    monkeypatch.setattr(orm.httpx, "get", fake_get)
+    monkeypatch.setattr(orm, "_snapshot_cache", {})
+    from app.config import get_settings
+    monkeypatch.setattr(get_settings(), "openrouter_provisioning_key", "sk-or-test", raising=False)
+
+    admin = _admin("or-admin@ex.io")
+    d = client.get("/api/admin/openrouter", headers=admin).json()
+    # Crédit : 25 - 20.5 = 4.5 $ restants → warning (< 10 $)
+    assert d["credits"]["remaining"] == 4.5 and d["credits"]["level"] == "warning"
+    # Incident frais et non résolu → la fenêtre d'alerte doit s'afficher
+    assert d["status"]["level"] == "incident"
+    assert "Elevated API errors" in d["status"]["message"]
+    assert d["status"]["incident"]["ongoing"] is True
+    # Top 10 : plafonné à 10, uniquement des modèles outillés, prix par M tokens
+    assert len(d["models"]) == 10
+    assert d["models"][0] == {"rank": 1, "id": "ai/m0", "name": "Model 0",
+                              "context": 200000, "prompt_usd_m": 1.0, "completion_usd_m": 2.0}
+    # Le cache sert la 2e lecture (fake_get remplacé par une bombe → pas rappelé)
+    monkeypatch.setattr(orm.httpx, "get", lambda *a, **k: (_ for _ in ()).throw(RuntimeError))
+    d2 = client.get("/api/admin/openrouter", headers=admin).json()
+    assert d2["checked_at"] == d["checked_at"]
+    # Non-admin refusé
+    user = _register("or-user@ex.io")
+    assert client.get("/api/admin/openrouter", headers=user).status_code == 403
 
 
 def test_lab_scenes_metadata():

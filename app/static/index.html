@@ -322,6 +322,19 @@
       padding:10px; margin:8px 0; max-height:180px; overflow:auto; }
   .rules-box { margin-top:10px; }
   .rules-box summary { cursor:pointer; font-size:13px; color:#7fb7c2; }
+  .or-alert { border:1px solid rgba(224,102,90,.75); background:rgba(110,28,22,.4);
+    color:#ffd9d4; border-radius:12px; padding:12px 16px; margin-top:14px; font-size:14px;
+    box-shadow:0 0 22px rgba(224,102,90,.28); backdrop-filter:blur(4px); }
+  .or-alert a { color:#ffb3a9; }
+  .tool-row { display:flex; gap:8px; align-items:center; margin-top:8px; flex-wrap:wrap; }
+  .tool-row input { margin-top:0; }
+  .tool-row .t-label { flex:1; min-width:130px; }
+  .tool-row .t-url { flex:2; min-width:200px; }
+  .eye-btn { background:none; color:var(--fg,#eee); border:1px solid var(--line);
+    border-radius:8px; padding:6px 10px; cursor:pointer; font-size:14px; line-height:1; }
+  .eye-btn.off { opacity:.35; }
+  .del-btn { background:none; color:#e0665a; border:1px solid rgba(224,102,90,.5);
+    border-radius:8px; padding:6px 10px; cursor:pointer; font-size:13px; line-height:1; }
   .ext-btn { display:inline-block; padding:8px 14px; border:1px solid var(--line);
              border-radius:999px; color:var(--text); text-decoration:none; font-size:13px;
              background:var(--surface); margin-left:auto; }
@@ -513,28 +526,45 @@
     <div id="sys-tiles" class="stat-tiles" style="margin-top:10px"></div>
     <div id="sys-advice" class="muted" style="margin-top:8px;font-size:13px"></div>
 
+    <!-- OpenRouter : alerte incident + crédit du compte + top modèles -->
+    <div id="or-alert" class="or-alert hidden"></div>
+    <div id="or-tiles" class="stat-tiles" style="margin-top:10px"></div>
+    <div class="prod-card wide">
+      <div class="prod-head"><span class="prod-ico">🧠</span><h3>Top 10 modèles agentiques — OpenRouter</h3>
+        <button class="ghost mini" style="margin-left:auto" onclick="loadOpenRouter(true)">Actualiser</button></div>
+      <p class="prod-sub">Classement d'usage OpenRouter le plus proche de l'agentique (catégorie
+        « programming »), restreint aux modèles qui savent appeler des outils. Prix en $ par
+        million de tokens (entrée / sortie).</p>
+      <div id="or-models" class="fleet-table" style="margin-top:10px"></div>
+      <div id="or-checked" class="muted" style="margin-top:8px;font-size:12px"></div>
+    </div>
+
     <h3 style="margin-top:28px">Comptes clients</h3>
     <p class="prod-sub">Triés par chiffre d'affaires. 🟢 = en ligne (&lt; 5 min).
       « Paniers » = agents jamais payés (relance possible).</p>
     <div id="clients-table" class="fleet-table" style="margin-top:10px"></div>
 
-    <!-- Outils externes : accès direct à tout ce qui sert à gérer -->
+    <!-- Outils externes : liste entièrement éditable (libellé, lien, œil, suppression) -->
     <div class="prod-card wide">
       <div class="prod-head"><span class="prod-ico">🧰</span><h3>Outils externes</h3></div>
-      <div class="row" style="flex-wrap:wrap;gap:10px;margin-top:8px">
-        <a class="ext-btn" href="https://higgsfield.ai" target="_blank" rel="noopener">🎬 Higgsfield (scènes)</a>
-        <a class="ext-btn" href="https://dashboard.stripe.com" target="_blank" rel="noopener">💳 Stripe Dashboard</a>
-        <a class="ext-btn" href="https://coolify.kechlab.com" target="_blank" rel="noopener">🚀 Coolify</a>
-        <a class="ext-btn" href="https://console.hetzner.com" target="_blank" rel="noopener">🖥 Hetzner Console</a>
-        <a class="ext-btn" href="https://openrouter.ai/settings/keys" target="_blank" rel="noopener">🔑 OpenRouter</a>
-      </div>
+      <div class="row" id="tool-btns" style="flex-wrap:wrap;gap:10px;margin-top:8px"></div>
+      <details style="margin-top:12px">
+        <summary class="muted" style="cursor:pointer;font-size:13px">✏️ Modifier la liste — ajouter, éditer, masquer (👁), supprimer (✕)</summary>
+        <div id="tool-rows" style="margin-top:10px"></div>
+        <div class="row" style="margin-top:10px">
+          <button class="ghost mini" onclick="addToolRow()">+ Ajouter un lien</button>
+          <button class="ghost mini" onclick="saveToolLinks()">Enregistrer les outils</button>
+          <span id="tool-msg" class="muted"></span>
+        </div>
+      </details>
     </div>
 
     <!-- Réseaux sociaux : liens affichés dans le pied de page public -->
     <div class="prod-card wide">
       <div class="prod-head"><span class="prod-ico">📣</span><h3>Réseaux sociaux &amp; chaîne promo</h3></div>
       <p class="prod-sub">Renseignez vos liens (https://…) : ils apparaissent aussitôt dans le pied de
-        page public du site. Videz un champ pour retirer le lien.</p>
+        page public du site. L'œil 👁 masque un lien du site sans le perdre ;
+        videz le champ pour le supprimer.</p>
       <div class="inline-fields" id="social-fields"></div>
       <div class="row" style="margin-top:12px">
         <button class="ghost mini" onclick="saveSocial()">Enregistrer les réseaux</button>
@@ -946,6 +976,88 @@ async function loadSystem() {
   } catch (e) { /* non-admin */ }
 }
 
+// ── OpenRouter : crédit du compte, alerte statut, top modèles ───────
+async function loadOpenRouter(force = false) {
+  if (!isAdmin || !$('or-tiles')) return;
+  try {
+    const d = await api('/api/admin/openrouter' + (force ? '?refresh=1' : ''));
+    // Fenêtre d'alerte : visible uniquement si OpenRouter annonce un souci
+    const al = $('or-alert');
+    if (d.status.level !== 'ok') {
+      const inc = d.status.incident;
+      al.innerHTML = `🚨 <b>${d.status.message}</b>` +
+        (inc && inc.ongoing ? ` — <a href="${inc.url}" target="_blank" rel="noopener">suivre l'incident ↗</a> <span class="muted">(${inc.state})</span>` : '') +
+        `<br><span style="font-size:12px;opacity:.85">Les agents de vos clients peuvent être ralentis ou muets pendant la perturbation.</span>`;
+      al.classList.remove('hidden');
+    } else { al.classList.add('hidden'); }
+
+    const c = d.credits;
+    const tile = (n, l, cls = '') => `<div class="stat-tile ${cls}"><div class="n">${n}</div><div class="l">${l}</div></div>`;
+    $('or-tiles').innerHTML =
+      tile(c.remaining == null ? '—' : c.remaining.toFixed(2) + ' $', 'Crédit OpenRouter restant', c.level) +
+      tile(c.usage == null ? '—' : c.usage.toFixed(2) + ' $', 'Consommé (cumul du compte)') +
+      tile(d.status.level === 'ok' ? 'OK' : d.status.level.toUpperCase(), 'API OpenRouter',
+           d.status.level === 'ok' ? 'ok' : d.status.level === 'unknown' ? 'warning' : 'critical');
+
+    $('or-models').innerHTML = d.models.length ? d.models.map(m => `
+      <div class="fleet-row">
+        <span class="st">#${m.rank}</span>
+        <div class="grow"><b>${m.name || m.id}</b>
+          <div class="who">${m.id} · contexte ${m.context ? Math.round(m.context / 1000) + ' k' : '?'}</div></div>
+        <span class="who">${m.prompt_usd_m == null ? '—' : m.prompt_usd_m + ' $'} / ${m.completion_usd_m == null ? '—' : m.completion_usd_m + ' $'} par M tokens</span>
+      </div>`).join('')
+      : '<p class="muted">Classement indisponible pour le moment (API muette) — réessayez.</p>';
+    $('or-checked').textContent =
+      (c.error ? '⚠️ ' + c.error + ' · ' : '') +
+      'Vérifié : ' + new Date(d.checked_at).toLocaleString('fr-FR') + ' (rafraîchi toutes les 5 min)';
+  } catch (e) { /* non-admin */ }
+}
+
+// ── Outils externes : liste éditable / masquable / supprimable ──────
+let toolLinks = [];
+
+async function loadToolLinks() {
+  if (!isAdmin || !$('tool-btns')) return;
+  try {
+    const d = await api('/api/admin/tool-links');
+    toolLinks = d.links;
+    renderToolLinks();
+  } catch (e) { /* ignore */ }
+}
+
+function renderToolLinks() {
+  $('tool-btns').innerHTML = toolLinks.filter(l => l.visible)
+    .map(l => `<a class="ext-btn" href="${l.url}" target="_blank" rel="noopener">${l.label}</a>`)
+    .join('') || '<span class="muted">Aucun outil visible — dépliez « Modifier la liste ».</span>';
+  $('tool-rows').innerHTML = toolLinks.map((l, i) => `
+    <div class="tool-row" data-i="${i}">
+      <input class="t-label" type="text" value="${l.label.replace(/"/g, '&quot;')}" placeholder="Libellé"
+             onchange="toolLinks[${i}].label=this.value">
+      <input class="t-url" type="url" value="${l.url.replace(/"/g, '&quot;')}" placeholder="https://…"
+             onchange="toolLinks[${i}].url=this.value">
+      <button class="eye-btn ${l.visible ? '' : 'off'}" title="${l.visible ? 'Masquer' : 'Afficher'}"
+              onclick="toolLinks[${i}].visible=!toolLinks[${i}].visible; renderToolLinks()">👁</button>
+      <button class="del-btn" title="Supprimer"
+              onclick="toolLinks.splice(${i},1); renderToolLinks()">✕</button>
+    </div>`).join('');
+}
+
+function addToolRow() {
+  toolLinks.push({label: '', url: '', visible: true});
+  renderToolLinks();
+  const rows = document.querySelectorAll('#tool-rows .tool-row');
+  rows[rows.length - 1]?.querySelector('.t-label')?.focus();
+}
+
+async function saveToolLinks() {
+  try {
+    const d = await api('/api/admin/tool-links', {method: 'PUT', body: JSON.stringify({links: toolLinks})});
+    toolLinks = d.links;
+    renderToolLinks();
+    $('tool-msg').textContent = '✔ Outils enregistrés';
+  } catch (e) { $('tool-msg').textContent = e.message; }
+}
+
 // ── Réseaux sociaux (admin → footer public) ─────────────────────────
 const SOCIAL_META = { youtube: 'YouTube', x: 'X (Twitter)', instagram: 'Instagram',
                       tiktok: 'TikTok', linkedin: 'LinkedIn', facebook: 'Facebook' };
@@ -953,16 +1065,37 @@ const SOCIAL_META = { youtube: 'YouTube', x: 'X (Twitter)', instagram: 'Instagra
 async function loadSocial() {
   if (!isAdmin || !$('social-fields')) return;
   try {
-    const d = await api('/api/social');
-    $('social-fields').innerHTML = Object.entries(SOCIAL_META).map(([k, label]) => `
-      <label>${label}<input class="soc-input" data-net="${k}" type="url"
-             value="${d.links[k] || ''}" placeholder="https://…"></label>`).join('');
+    const d = await api('/api/admin/social');
+    $('social-fields').innerHTML = Object.entries(SOCIAL_META).map(([k, label]) => {
+      const v = d.links[k] || {url: '', visible: true};
+      return `
+      <label>${label}
+        <span style="display:flex;gap:6px;align-items:center">
+          <input class="soc-input" data-net="${k}" type="url"
+                 value="${v.url}" placeholder="https://…" style="flex:1">
+          <button type="button" class="eye-btn soc-eye ${v.visible ? '' : 'off'}" data-net="${k}"
+                  data-visible="${v.visible ? '1' : '0'}"
+                  title="${v.visible ? 'Visible sur le site — cliquer pour masquer' : 'Masqué — cliquer pour afficher'}"
+                  onclick="toggleSocEye(this)">👁</button>
+        </span>
+      </label>`;
+    }).join('');
   } catch (e) { /* ignore */ }
+}
+
+function toggleSocEye(btn) {
+  const on = btn.dataset.visible !== '1';
+  btn.dataset.visible = on ? '1' : '0';
+  btn.classList.toggle('off', !on);
+  btn.title = on ? 'Visible sur le site — cliquer pour masquer' : 'Masqué — cliquer pour afficher';
 }
 
 async function saveSocial() {
   const links = {};
-  document.querySelectorAll('.soc-input').forEach(i => { links[i.dataset.net] = i.value.trim(); });
+  document.querySelectorAll('.soc-input').forEach(i => {
+    const eye = document.querySelector(`.soc-eye[data-net="${i.dataset.net}"]`);
+    links[i.dataset.net] = {url: i.value.trim(), visible: !eye || eye.dataset.visible === '1'};
+  });
   try {
     await api('/api/admin/social', {method: 'PUT', body: JSON.stringify({links})});
     $('social-msg').textContent = '✔ Réseaux enregistrés';
@@ -1578,7 +1711,7 @@ function refresh() {
       $('who').textContent = email + (isAdmin ? ' · admin' : '');
       $('settings').classList.toggle('hidden', !isAdmin);
       $('verify-banner').classList.toggle('hidden', !!me.email_verified);
-      if (isAdmin) { renderCachedTenants(); loadStripe(); loadFleet(); loadPromos(); loadScenes(); loadOverview(); loadSystem(); loadSocial(); }
+      if (isAdmin) { renderCachedTenants(); loadStripe(); loadFleet(); loadPromos(); loadScenes(); loadOverview(); loadSystem(); loadSocial(); loadOpenRouter(); loadToolLinks(); }
     }).catch(() => {});
     loadPricing().then(loadTenants);
     // Atterrissage sur « Commander » (et pas sur « Mon compte » restauré par
