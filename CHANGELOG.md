@@ -3,6 +3,29 @@
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/).
 Les dates suivent l'ordre de développement.
 
+## [Non publié — branche de test] — Import manuel des médias de l'Atelier
+
+### Ajouté
+- **Import manuel des scènes** (production hors Higgsfield) : chaque fiche
+  scène a un bouton « 📥 Importer une vidéo » ; les plans de référence A/B ont
+  leur propre carte avec vignette, import et retour au défaut. Le média importé
+  devient ACTIF aussitôt, la fiche est marquée « import manuel », « ↺ Défaut »
+  restaure le fichier d'origine.
+- **Contraintes affichées et vérifiées** : notice dépliable dans l'admin
+  (formats, tailles, durées, raccord) ; côté serveur le type réel est contrôlé
+  par signature binaire (pas l'extension), la taille est bornée (vidéo 30 Mo,
+  image 5 Mo) ; résolution ≠ 1280×720 ou durée > 15 s → avertissement non
+  bloquant affiché après l'import (sonde ffmpeg si disponible).
+- **Stockage persistant** : les imports vivent dans le volume de données
+  (`data/media`, servi sous `/media/...`) — ils survivent aux redéploiements,
+  contrairement à `app/static/` reconstruit avec l'image Docker.
+- Le moteur du front sait charger chaque scène depuis `/static` (embarquée) ou
+  `/media` (importée) avec ses extensions réelles ; les plans fixes A/B suivent
+  aussi la configuration (`/api/lab-config` renvoie `custom` + `refs`).
+
+### Technique
+- Nouvelle dépendance `python-multipart` (upload FastAPI).
+
 ## [Non publié — branche de test] — Vigie OpenRouter et variables assouplies
 
 ### Ajouté

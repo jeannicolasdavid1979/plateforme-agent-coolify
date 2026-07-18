@@ -74,6 +74,11 @@
   button:disabled { opacity:.5; cursor:not-allowed; transform:none; box-shadow:none; }
   button.ghost { background:var(--surface); color:var(--text); border:1px solid var(--line); }
   button.ghost:hover { box-shadow:0 8px 24px rgba(0,0,0,0.35); }
+  /* Les libellés « importer » (input file caché) s'habillent comme des boutons */
+  label.ghost { display:inline-block; background:var(--surface); color:var(--text);
+    border:1px solid var(--line); border-radius:9px; font-weight:600; }
+  label.ghost.mini { padding:4px 10px; font-size:12px; }
+  label.ghost:hover { box-shadow:0 8px 24px rgba(0,0,0,0.35); }
 
   button.danger { background:transparent; color:var(--bad); border:1px solid rgba(224,92,92,.4); }
   button.danger:hover { background:rgba(224,92,92,.12); box-shadow:none; }
@@ -669,6 +674,13 @@
         <pre id="prompt-rules"></pre>
         <button class="ghost mini" onclick="copyText($('prompt-rules').textContent, this)">Copier</button>
       </details>
+      <details class="rules-box"><summary>📥 Import manuel — formats, tailles et durées acceptés</summary>
+        <pre id="upload-rules"></pre>
+      </details>
+
+      <!-- Plans de référence A/B : remplaçables par import manuel -->
+      <div id="ref-cards" class="row" style="flex-wrap:wrap;gap:12px;margin-top:12px"></div>
+
       <div id="scene-rows"></div>
       <div class="row" style="margin-top:12px">
         <button class="ghost" onclick="saveScenes()">Enregistrer les fichiers de scènes</button>
@@ -885,24 +897,54 @@ async function loadScenes() {
   try {
     const d = await api('/api/admin/lab-scenes');
     if ($('prompt-rules')) $('prompt-rules').textContent = d.prompt_rules;
+    if ($('upload-rules')) $('upload-rules').textContent = d.upload_constraints || '';
+
+    // Plans de référence A/B : vignette + import + retour au défaut
+    if ($('ref-cards')) {
+      const refCard = (key, url, label, hint) => `
+        <div class="prod-card" style="flex:1;min-width:250px">
+          <div class="prod-head"><span class="prod-ico">🖼</span><h3>${label}</h3>
+            ${url.startsWith('/media/') ? '<span class="scene-tag">import manuel</span>' : ''}</div>
+          <img src="${url}" alt="" style="width:100%;border-radius:9px;display:block">
+          <p class="prod-sub" style="margin-top:6px">${hint}</p>
+          <div class="row" style="gap:8px;margin-top:6px">
+            <label class="ghost mini" style="cursor:pointer;margin:0">📥 Importer
+              <input type="file" hidden accept=".webp,.png,.jpg,.jpeg,image/webp,image/png,image/jpeg"
+                     onchange="uploadLabMedia('${key}', this)">
+            </label>
+            ${url.startsWith('/media/') ? `<button class="ghost mini" onclick="resetLabMedia('${key}')">↺ Défaut</button>` : ''}
+          </div>
+        </div>`;
+      $('ref-cards').innerHTML =
+        refCard('ref-a', d.refs.a, 'Plan A — atelier inerte', 'Point de départ et d’arrivée de toutes les scènes « dormantes ».') +
+        refCard('ref-b', d.refs.b, 'Plan B — Hermès vivant', 'État éveillé : visière allumée, balise verte, écran actif.');
+    }
+
     $('scene-rows').innerHTML = d.scenes.map(s => {
-      const poster = s.refs.startsWith('B') ? '/static/lab-b.webp' : '/static/lab.webp';
+      const poster = s.refs.startsWith('B') ? d.refs.b : d.refs.a;
+      const custom = d.custom[s.file];  // extensions si le fichier actif est un import
+      const srcBase = custom ? `/media/${s.file}` : `/static/${s.file}`;
       return `
       <div class="scene-card">
         <div class="scene-thumb" onclick="playScene(this)" title="Cliquer pour lire la scène active">
           <video preload="none" poster="${poster}" playsinline
-                 data-src="/static/${s.file}"></video>
+                 data-src="${srcBase}" data-exts="${custom ? custom.join(',') : 'webm,mp4'}"></video>
           <div class="play-badge">▶</div>
         </div>
         <div class="scene-info">
-          <h4>${s.label}<span class="scene-tag">${s.kind}</span><span class="scene-tag">${s.refs}</span></h4>
+          <h4>${s.label}<span class="scene-tag">${s.kind}</span><span class="scene-tag">${s.refs}</span>${custom ? '<span class="scene-tag">import manuel</span>' : ''}</h4>
           <div class="scene-meta">
             <b>Élément :</b> ${s.element}<br>
             <b>Déclenché :</b> ${s.events}
           </div>
-          <div class="row" style="margin-top:8px;gap:8px">
+          <div class="row" style="margin-top:8px;gap:8px;flex-wrap:wrap">
             <input class="tr-link sc-input" data-trigger="${s.trigger}" style="max-width:210px"
                    value="${s.file === 'lab-' + s.trigger ? '' : s.file}" placeholder="lab-${s.trigger}">
+            <label class="ghost mini" style="cursor:pointer;margin:0">📥 Importer une vidéo
+              <input type="file" hidden accept=".webm,.mp4,video/webm,video/mp4"
+                     onchange="uploadLabMedia('${s.trigger}', this)">
+            </label>
+            ${custom ? `<button class="ghost mini" onclick="resetLabMedia('${s.trigger}')">↺ Défaut</button>` : ''}
             <span class="muted" style="font-size:11px">fichier actif : <code>${s.file}</code></span>
           </div>
           <details>
@@ -920,17 +962,49 @@ async function loadScenes() {
 function playScene(box) {
   const v = box.querySelector('video');
   const badge = box.querySelector('.play-badge');
-  if (!v.src) {
-    v.innerHTML = '';
-    for (const [ext, type] of [['webm', 'video/webm'], ['mp4', 'video/mp4']]) {
+  if (!v.childElementCount) {
+    const types = { webm: 'video/webm', mp4: 'video/mp4' };
+    for (const ext of (v.dataset.exts || 'webm,mp4').split(',')) {
       const s = document.createElement('source');
-      s.src = v.dataset.src + '.' + ext; s.type = type;
+      s.src = v.dataset.src + '.' + ext; s.type = types[ext] || '';
       v.appendChild(s);
     }
     v.controls = true; v.load();
   }
   if (v.paused) { v.play().catch(() => {}); badge.style.display = 'none'; }
   else { v.pause(); badge.style.display = 'grid'; }
+}
+
+// ── Import manuel d'un média (vidéo de scène ou plan A/B) ───────────
+async function uploadLabMedia(target, input) {
+  const file = input.files && input.files[0];
+  if (!file) return;
+  input.value = '';
+  $('scenes-msg').textContent = '⏳ Import de « ' + file.name + ' »…';
+  try {
+    const fd = new FormData();
+    fd.append('target', target);
+    fd.append('file', file);
+    const res = await fetch('/api/admin/lab-media', {
+      method: 'POST', body: fd,
+      headers: token ? { Authorization: 'Bearer ' + token } : {},
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(errorMessage(body.detail, res.status));
+    $('scenes-msg').textContent = '✔ Importé et activé : ' + body.file +
+      (body.warnings && body.warnings.length ? ' — ⚠️ ' + body.warnings.join(' ') : '');
+    await Lab.reloadConfig();
+    loadScenes();
+  } catch (e) { $('scenes-msg').textContent = '❌ ' + e.message; }
+}
+
+async function resetLabMedia(target) {
+  try {
+    await api('/api/admin/lab-media/' + target, { method: 'DELETE' });
+    $('scenes-msg').textContent = '↺ Retour au média d\'origine (' + target + ')';
+    await Lab.reloadConfig();
+    loadScenes();
+  } catch (e) { $('scenes-msg').textContent = '❌ ' + e.message; }
 }
 
 // ── Supervision : stats, clients, santé serveur ─────────────────────
@@ -1773,6 +1847,8 @@ const Lab = (() => {
   let playing = null;
   const lastPlayed = {};
   let sceneMap = {};
+  let sceneMedia = {};   // fichiers importés manuellement : {base: ['webm','mp4']}
+  let labRefs = { a: '/static/lab.webp', b: '/static/lab-b.webp' };
   const EVENTS = {
     intro:    { prio: 5, cooldown: 0 },
     email:    { prio: 1, cooldown: 45000 },
@@ -1789,9 +1865,15 @@ const Lab = (() => {
 
   function setSources(v, name) {
     v.pause(); v.innerHTML = '';
-    for (const [ext, type] of [['webm', 'video/webm'], ['mp4', 'video/mp4']]) {
+    const f = fileFor(name);
+    // Import manuel : servi depuis /media avec ses extensions réelles ;
+    // sinon les fichiers embarqués dans /static (webm + mp4).
+    const pairs = sceneMedia[f]
+      ? sceneMedia[f].map(ext => [`/media/${f}.${ext}`, ext === 'mp4' ? 'video/mp4' : 'video/webm'])
+      : [[`/static/${f}.webm`, 'video/webm'], [`/static/${f}.mp4`, 'video/mp4']];
+    for (const [src, type] of pairs) {
       const s = document.createElement('source');
-      s.src = `/static/${fileFor(name)}.${ext}`; s.type = type;
+      s.src = src; s.type = type;
       v.appendChild(s);
     }
     v.load();
@@ -1804,7 +1886,7 @@ const Lab = (() => {
     if (reduced) return;
     // L'image fixe de secours suit l'état de référence (A = inerte, B = vivant)
     const img = $('scene-img');
-    if (img) img.src = (name === 'alive') ? '/static/lab-b.webp' : '/static/lab.webp';
+    if (img) img.src = (name === 'alive') ? labRefs.b : labRefs.a;
     const v = bases[name];
     if (!v || currentBase === name) return;
     const prevName = currentBase;
@@ -1839,9 +1921,19 @@ const Lab = (() => {
   }
 
   return {
+    async reloadConfig() {
+      try {
+        const cfg = await api('/api/lab-config');
+        sceneMap = cfg.map || {};
+        sceneMedia = cfg.custom || {};
+        labRefs = cfg.refs || labRefs;
+        const img = $('scene-img');
+        if (img) img.src = (currentBase === 'alive') ? labRefs.b : labRefs.a;
+      } catch (e) { /* hors ligne : défauts embarqués */ }
+    },
     async init() {
       if (reduced) return;
-      try { sceneMap = (await api('/api/lab-config')).map || {}; } catch (e) {}
+      await this.reloadConfig();
       base('dormant');
       if (!sessionStorage.getItem('lab_intro')) {
         sessionStorage.setItem('lab_intro', '1');

@@ -159,6 +159,7 @@ Configurées dans Coolify → Application → Environment :
 | `SMTP_HOST`·`SMTP_PORT`·`SMTP_USER`·`SMTP_PASSWORD`·`SMTP_FROM` | Envoi des e-mails (vérification, reset). Sans `SMTP_HOST` : liens journalisés | `smtp.example.com` |
 | `PUBLIC_BASE_URL` | Base des liens dans les e-mails (défaut : `site_url`) | `https://plateformehermes.kechlab.com` |
 | `DATABASE_URL` | Emplacement de la base (défaut : volume persistant) | `sqlite:////app/data/orchestrator.db` |
+| `LAB_MEDIA_DIR` | Dossier des médias importés en admin (défaut : `./data/media`, dans le volume) | `/app/data/media` |
 | `JWT_SECRET` | Secret pour les JWT | `HermesPlatformSecret2026!Kechlab` |
 | `ADMIN_EMAILS` | Emails admin (séparés par virgules) | `david.jn@orange.fr` |
 | `BASE_DOMAIN` | Domaine de base pour les agents | `kechlab.com` |

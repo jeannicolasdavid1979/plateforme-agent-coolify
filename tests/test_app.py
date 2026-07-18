@@ -1445,6 +1445,70 @@ def test_admin_openrouter_snapshot(monkeypatch):
     assert client.get("/api/admin/openrouter", headers=user).status_code == 403
 
 
+def test_lab_media_import_manuel(tmp_path, monkeypatch):
+    """Import manuel d'une scène produite hors Higgsfield : vérification du
+    format réel, activation immédiate, service depuis /media, retour au défaut."""
+    from app import lab_media as lm
+    monkeypatch.setattr(lm, "MEDIA_DIR", str(tmp_path))
+    admin = _admin("media-admin@ex.io")
+
+    # Vidéo WebM (signature EBML) sur la scène « birth » → activée aussitôt
+    webm = b"\x1aE\xdf\xa3" + b"\x00" * 64
+    r = client.post("/api/admin/lab-media", data={"target": "birth"},
+                    files={"file": ("naissance.webm", webm, "video/webm")}, headers=admin)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["active"] and body["file"].startswith("u-birth-") and body["file"].endswith(".webm")
+    base = body["file"].rsplit(".", 1)[0]
+    cfg = client.get("/api/lab-config").json()
+    assert cfg["map"]["birth"] == base
+    assert cfg["custom"][base] == ["webm"]
+    served = client.get(body["url"])
+    assert served.status_code == 200 and served.content == webm
+
+    # Un nouvel import (MP4, signature ftyp) REMPLACE l'ancien
+    mp4 = b"\x00\x00\x00\x18ftypisom" + b"\x00" * 64
+    r2 = client.post("/api/admin/lab-media", data={"target": "birth"},
+                     files={"file": ("v2.mp4", mp4, "video/mp4")}, headers=admin)
+    assert r2.status_code == 200 and r2.json()["file"].endswith(".mp4")
+    import os as _os
+    assert [f for f in _os.listdir(tmp_path) if f.startswith("u-birth-")] == [r2.json()["file"]]
+
+    # Plan de référence B : image WebP
+    webp = b"RIFF\x00\x00\x00\x00WEBP" + b"\x00" * 32
+    r3 = client.post("/api/admin/lab-media", data={"target": "ref-b"},
+                     files={"file": ("planB.webp", webp, "image/webp")}, headers=admin)
+    assert r3.status_code == 200
+    assert client.get("/api/lab-config").json()["refs"]["b"].startswith("/media/u-ref-b-")
+
+    # Refus : format inconnu, cible inconnue, image sur une scène vidéo, non-admin
+    assert client.post("/api/admin/lab-media", data={"target": "birth"},
+                       files={"file": ("x.webm", b"bonjour", "video/webm")},
+                       headers=admin).status_code == 400
+    assert client.post("/api/admin/lab-media", data={"target": "xxx"},
+                       files={"file": ("x.webm", webm, "video/webm")},
+                       headers=admin).status_code == 400
+    assert client.post("/api/admin/lab-media", data={"target": "email"},
+                       files={"file": ("x.webp", webp, "image/webp")},
+                       headers=admin).status_code == 400
+    monkeypatch.setattr(lm, "MAX_VIDEO_BYTES", 16)
+    assert client.post("/api/admin/lab-media", data={"target": "email"},
+                       files={"file": ("gros.webm", webm, "video/webm")},
+                       headers=admin).status_code == 400
+    user = _register("media-user@ex.io")
+    assert client.post("/api/admin/lab-media", data={"target": "birth"},
+                       files={"file": ("x.mp4", mp4, "video/mp4")},
+                       headers=user).status_code == 403
+
+    # Retour au défaut : fichiers purgés, mapping et plan restaurés
+    assert client.delete("/api/admin/lab-media/birth", headers=admin).status_code == 200
+    assert client.delete("/api/admin/lab-media/ref-b", headers=admin).status_code == 200
+    cfg = client.get("/api/lab-config").json()
+    assert cfg["map"]["birth"] == "lab-birth"
+    assert cfg["refs"]["b"] == "/static/lab-b.webp"
+    assert not [f for f in _os.listdir(tmp_path) if f.startswith(("u-birth-", "u-ref-b-"))]
+
+
 def test_lab_scenes_metadata():
     """Les fiches scènes donnent déclencheur, plans de référence et template."""
     admin = _admin("scenes-meta@ex.io")

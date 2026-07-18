@@ -1,10 +1,11 @@
 """API routes — auth, agent CRUD, paiement simulé, provisioning."""
 from __future__ import annotations
 
+import os
 import re
 
-from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 from sqlalchemy import delete as sa_delete, select
 from sqlalchemy.orm import Session
@@ -267,11 +268,34 @@ LAB_TRIGGERS = (
 )
 
 
+LAB_REFS_KEY = "lab_refs"
+
+
+def _lab_refs(db: Session) -> dict:
+    """URLs des plans de référence A (atelier inerte) et B (Hermès vivant) —
+    les fichiers importés priment sur ceux embarqués dans app/static/."""
+    import json as _json
+    row = db.get(Setting, LAB_REFS_KEY)
+    stored = {}
+    if row and row.value.strip():
+        try:
+            stored = _json.loads(row.value)
+        except Exception:
+            stored = {}
+    return {
+        "a": f"/media/{stored['a']}" if stored.get("a") else "/static/lab.webp",
+        "b": f"/media/{stored['b']}" if stored.get("b") else "/static/lab-b.webp",
+    }
+
+
 @router.get("/api/lab-config")
 def lab_config(db: Session = Depends(get_db)):
     """Mapping interaction → nom de scène (public — lu par le moteur du front).
-    Par défaut chaque déclencheur utilise `lab-<déclencheur>`."""
+    Par défaut chaque déclencheur utilise `lab-<déclencheur>`. `custom` liste
+    les fichiers importés manuellement (servis sous /media) avec leurs
+    extensions réelles ; `refs` donne les plans de référence actifs."""
     import json as _json
+    from . import lab_media as lm
     row = db.get(Setting, LAB_SCENES_KEY)
     overrides = {}
     if row and row.value.strip():
@@ -279,7 +303,11 @@ def lab_config(db: Session = Depends(get_db)):
             overrides = _json.loads(row.value)
         except Exception:
             overrides = {}
-    return {"map": {t: overrides.get(t, f"lab-{t}") for t in LAB_TRIGGERS}}
+    return {
+        "map": {t: overrides.get(t, f"lab-{t}") for t in LAB_TRIGGERS},
+        "custom": lm.list_custom(),
+        "refs": _lab_refs(db),
+    }
 
 
 class LabConfigUpdate(BaseModel):
@@ -313,14 +341,124 @@ def lab_scenes(admin: User = Depends(require_admin), db: Session = Depends(get_d
     référence, template de prompt (contraintes de raccord incluses), fichier
     actif. La source de vérité pour régénérer ou changer de décor."""
     from .lab_scenes import PROMPT_RULES, SCENES
-    current = lab_config(db)["map"]
+    from . import lab_media as lm
+    cfg = lab_config(db)
+    current = cfg["map"]
     return {
         "prompt_rules": PROMPT_RULES,
+        "upload_constraints": lm.CONSTRAINTS,
+        "custom": cfg["custom"],
+        "refs": cfg["refs"],
         "scenes": [
             {"trigger": t, "file": current.get(t, f"lab-{t}"), **meta}
             for t, meta in SCENES.items()
         ],
     }
+
+
+# ── Import manuel des médias (production hors Higgsfield) ────────────
+
+REF_TARGETS = ("ref-a", "ref-b")
+
+
+@router.get("/media/{name}")
+def serve_media(name: str):
+    """Sert les médias importés depuis le volume de données (persistant)."""
+    from . import lab_media as lm
+    if not re.match(r"^[a-z0-9][a-z0-9.-]*$", name) or ".." in name:
+        raise HTTPException(404)
+    path = os.path.join(lm.MEDIA_DIR, name)
+    if not os.path.isfile(path):
+        raise HTTPException(404)
+    types = {**lm.VIDEO_EXTS, **lm.IMAGE_EXTS}
+    media_type = types.get(os.path.splitext(name)[1])
+    return FileResponse(path, media_type=media_type,
+                        headers={"Cache-Control": "public, max-age=86400"})
+
+
+@router.post("/api/admin/lab-media")
+async def upload_lab_media(target: str = Form(...), file: UploadFile = File(...),
+                           admin: User = Depends(require_admin),
+                           db: Session = Depends(get_db)):
+    """Importe une vidéo de scène (cible = déclencheur) ou un plan de
+    référence (cible = ref-a / ref-b). Le format réel est vérifié par
+    signature binaire, la taille est bornée, et le média devient ACTIF
+    aussitôt. Résolution/durée inattendues → avertissements non bloquants."""
+    import json as _json
+    import time as _time
+    from . import lab_media as lm
+
+    is_ref = target in REF_TARGETS
+    if not is_ref and target not in LAB_TRIGGERS:
+        raise HTTPException(400, f"Cible inconnue : {target}")
+
+    data = await file.read()
+    limit = lm.MAX_IMAGE_BYTES if is_ref else lm.MAX_VIDEO_BYTES
+    if not data:
+        raise HTTPException(400, "Fichier vide.")
+    if len(data) > limit:
+        raise HTTPException(400, f"Fichier trop lourd ({len(data) / 1e6:.1f} Mo) — "
+                                 f"maximum {limit // (1024 * 1024)} Mo.")
+    ext = lm.sniff(data)
+    allowed = lm.IMAGE_EXTS if is_ref else lm.VIDEO_EXTS
+    if ext not in allowed:
+        kinds = ("WebP, PNG ou JPEG" if is_ref else "WebM (VP9) ou MP4 (H.264)")
+        raise HTTPException(400, f"Format non reconnu — attendu : {kinds}.")
+
+    os.makedirs(lm.MEDIA_DIR, exist_ok=True)
+    lm.purge_target(target)  # un import remplace le précédent
+    base = f"u-{target}-{int(_time.time())}"
+    fname = base + ext
+    path = os.path.join(lm.MEDIA_DIR, fname)
+    with open(path, "wb") as f:
+        f.write(data)
+
+    # Activation immédiate : la scène (ou le plan) importé devient celui du site
+    if is_ref:
+        row = db.get(Setting, LAB_REFS_KEY)
+        stored = {}
+        if row and row.value.strip():
+            try:
+                stored = _json.loads(row.value)
+            except Exception:
+                stored = {}
+        stored["a" if target == "ref-a" else "b"] = fname
+        _upsert_setting(db, LAB_REFS_KEY, _json.dumps(stored))
+    else:
+        current = lab_config(db)["map"]
+        current = {k: v for k, v in current.items() if v != f"lab-{k}"}
+        current[target] = base
+        _upsert_setting(db, LAB_SCENES_KEY, _json.dumps(current))
+    db.commit()
+
+    return {"file": fname, "url": f"/media/{fname}", "active": True,
+            "warnings": lm.probe_warnings(path, is_image=is_ref)}
+
+
+@router.delete("/api/admin/lab-media/{target}")
+def reset_lab_media(target: str, admin: User = Depends(require_admin),
+                    db: Session = Depends(get_db)):
+    """Retour au média d'origine : supprime les fichiers importés de la cible
+    et repointe la scène (ou le plan de référence) sur le fichier embarqué."""
+    import json as _json
+    from . import lab_media as lm
+
+    is_ref = target in REF_TARGETS
+    if not is_ref and target not in LAB_TRIGGERS:
+        raise HTTPException(400, f"Cible inconnue : {target}")
+    lm.purge_target(target)
+    key = LAB_REFS_KEY if is_ref else LAB_SCENES_KEY
+    row = db.get(Setting, key)
+    stored = {}
+    if row and row.value.strip():
+        try:
+            stored = _json.loads(row.value)
+        except Exception:
+            stored = {}
+    stored.pop("a" if target == "ref-a" else "b" if target == "ref-b" else target, None)
+    _upsert_setting(db, key, _json.dumps(stored))
+    db.commit()
+    return {"target": target, "restored": "défaut"}
 
 
 # ── Supervision (l'essence de l'admin : tout voir, tout savoir) ──────
