@@ -155,13 +155,21 @@ class CoolifyClient:
         except Exception:
             return []
 
-    def trigger_deploy(self, svc_uuid: str) -> bool:
+    def trigger_deploy(self, svc_uuid: str, force: bool = False) -> bool:
         """Force un déploiement complet — contrairement à /start, Coolify
-        re-parse le compose et régénère les labels Traefik (donc le domaine)."""
+        re-parse le compose et régénère les labels Traefik (donc le domaine).
+
+        `force=True` demande un déploiement SANS cache : indispensable pour une
+        mise à jour, car les images suivent des tags flottants (`latest`) —
+        sans nouveau tirage, l'hôte réutilise l'image qu'il a déjà et
+        l'« update » ne changerait rien."""
         try:
+            params = {"uuid": svc_uuid}
+            if force:
+                params["force"] = "true"
             resp = httpx.get(
                 f"{self.base_url}/api/v1/deploy",
-                params={"uuid": svc_uuid},
+                params=params,
                 headers=self._headers,
                 timeout=self.timeout,
             )

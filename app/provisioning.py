@@ -30,6 +30,7 @@ STEPS = [
 UPDATE_STEPS = [
     "update_service",
     "health_check",
+    "read_versions",
     "done",
 ]
 
@@ -174,9 +175,14 @@ class ProvisioningEngine:
         tenant.status = "deploying"
         self.db.commit()
 
+        # Les étapes SONT celles enregistrées dans le job : une mise à jour en
+        # a moins qu'un premier déploiement. Rejouer STEPS ici recréerait un
+        # second service Coolify pour un agent qui en a déjà un.
+        steps = [s["name"] for s in job.steps] or STEPS
+
         completed: list[str] = []
         try:
-            for name in STEPS:
+            for name in steps:
                 self._mark_step(job, name, "running")
                 detail = getattr(self, f"_step_{name}")(tenant, job)
                 self._mark_step(job, name, "done", detail or "")
@@ -189,7 +195,7 @@ class ProvisioningEngine:
 
         except Exception as exc:
             logger.exception("Provisioning failed for %s", tenant.name)
-            failed_step = next((s for s in STEPS if s not in completed), "?")
+            failed_step = next((s for s in steps if s not in completed), "?")
             self._mark_step(job, failed_step, "failed", str(exc)[:500])
             job.error = f"{failed_step}: {exc}"[:1000]
             job.status = "failed"
@@ -429,13 +435,25 @@ class ProvisioningEngine:
             raise RuntimeError("Service Coolify non trouvé")
 
         svc_uuid = tenant.coolify_service_uuid
-        # Force le re-parse et redéploiement avec pull des nouvelles images
-        if not client.trigger_deploy(svc_uuid):
+        # SANS CACHE : les images suivent des tags flottants, un déploiement
+        # ordinaire réutiliserait l'image déjà présente sur l'hôte et la mise
+        # à jour n'apporterait rien.
+        if not client.trigger_deploy(svc_uuid, force=True):
             client.restart_service(svc_uuid)
 
-        status = client.wait_running(svc_uuid, timeout=240)
+        status = client.wait_running(svc_uuid, timeout=300)
         if not status or "running" not in status:
             raise RuntimeError(
-                f"service ne redémarre pas (statut : {status or 'inconnu'})"
+                f"votre agent ne redémarre pas (statut : {status or 'inconnu'})"
             )
-        return f"agent redéployé avec versions mises à jour ({status})"
+        return "dernières images récupérées et agent redémarré"
+
+    def _step_read_versions(self, tenant: Tenant, job: ProvisioningJob) -> str:
+        """Relit la version installée SUR l'agent après le redéploiement —
+        on constate le résultat au lieu de le présumer."""
+        from . import agent_updates
+
+        if agent_updates.detect_installed_versions(tenant):
+            self.db.commit()
+            return f"version installée : {tenant.hermes_webui_version or '?'}"
+        return "version non lisible pour le moment (agent en cours de démarrage)"

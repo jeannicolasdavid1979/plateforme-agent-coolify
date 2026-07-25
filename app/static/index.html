@@ -290,6 +290,16 @@
   .inline-fields label { flex:1; min-width:160px; margin-top:0; }
   .pill { display:inline-block; font-size:12px; padding:2px 10px; border-radius:999px;
           border:1px solid var(--line); color:var(--muted); }
+  /* Mises à jour, côté client : discret tant que tout va bien, mis en avant
+     dès qu'une version plus récente existe. */
+  .upd { margin-top:14px; padding-top:14px; border-top:1px solid var(--line); }
+  .upd-body { margin-top:8px; font-size:13px; line-height:1.6; }
+  .upd .vers { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--text); }
+  .upd.has-update { border-top-color:var(--accent); }
+  .upd.has-update .upd-body { color:var(--text); }
+  .upd-cta { margin-top:10px; }
+  .upd-note { color:var(--muted); font-size:12px; margin-top:6px; }
+
   /* Confirmation de suppression : le nom à recopier est affiché et copiable
      en un clic — la garde reste la frappe exacte, sans la corvée de saisie. */
   .modal-veil { position:fixed; inset:0; background:rgba(3,3,6,.78); backdrop-filter:blur(6px);
@@ -844,8 +854,14 @@ const STEP_LABELS = {
   set_fqdn: 'Attribution de votre adresse sécurisée',
   start_service: 'Démarrage de votre agent',
   health_check: 'Vérification finale',
+  update_service: 'Installation de la dernière version',
+  read_versions: 'Contrôle de la version installée',
   done: 'Agent en ligne',
 };
+// Dernier état des mises à jour, par agent : la carte est re-rendue souvent
+// (chrono de finalisation), on ne veut pas perdre l'information affichée.
+const updCache = {};
+const updProbed = {};  // une seule sonde automatique par agent et par visite
 const STATUS_LABELS = { awaiting_payment: 'à payer', pending: 'en attente', deploying: 'déploiement', running: 'en ligne', failed: 'échec' };
 let pricing = { deploy_price_eur: 0, topup_amount_eur: 0, initial_credit_eur: 0, service_fee_rate: 0,
                 hosting_manual_eur: 29, hosting_sub_monthly_eur: 19, hosting_annual_eur: 209,
@@ -1647,6 +1663,13 @@ function renderTenantCard(a, job, fz) {
         <button class="ghost" onclick="restartAgent('${a.id}')">Redémarrer</button>
         ${del}
       </div>
+      <div class="upd fade-up" id="upd-${a.id}">
+        <div class="row" style="justify-content:space-between;align-items:center;gap:10px">
+          <span class="muted">Version de votre agent</span>
+          <button class="ghost mini" onclick="checkMyUpdates('${a.id}')">Vérifier les mises à jour</button>
+        </div>
+        <div class="upd-body muted"></div>
+      </div>
       <div class="topup fade-up">
         <span class="muted">Recharger le crédit IA${(pricing.service_fee_rate > 0)
           ? ` — frais de service +${Math.round(pricing.service_fee_rate * 100)} % (finance l'exploitation de la plateforme)`
@@ -1699,6 +1722,14 @@ function renderCachedTenants() {
     : '<p class="muted">Aucun agent pour le moment — commandez le vôtre ci-dessus.</p>';
   clearInterval(finalizeTicker);
   if (states.some(Boolean)) finalizeTicker = setInterval(renderCachedTenants, 500);
+
+  // Version de chaque agent en ligne : état déjà connu réaffiché aussitôt,
+  // sinon une vérification discrète — le client n'a rien à demander pour
+  // savoir qu'une nouvelle version existe.
+  tenantsCache.filter(a => a.status === 'running').forEach(a => {
+    if (updCache[a.id]) renderMyUpdates(a.id, updCache[a.id]);
+    else if (!updProbed[a.id]) { updProbed[a.id] = true; checkMyUpdates(a.id, true); }
+  });
 }
 
 async function loadTenants() {
@@ -1719,6 +1750,80 @@ async function loadTenants() {
   const active = tenantsCache.some(a => ['pending', 'deploying'].includes(a.status));
   clearInterval(pollTimer);
   if (active) pollTimer = setInterval(loadTenants, 2500);
+}
+
+// ── Mises à jour, côté client ───────────────────────────────────────
+// Le client voit la version qui tourne RÉELLEMENT sur son agent, celle
+// publiée en amont, et déclenche la mise à jour lui-même.
+function updBox(id) {
+  const box = $('upd-' + id);
+  return box ? { box, body: box.querySelector('.upd-body') } : null;
+}
+
+async function checkMyUpdates(id, silent = false) {
+  const el = updBox(id);
+  if (!el) return;
+  if (!silent) el.body.textContent = 'Vérification en cours…';
+  try {
+    const d = await api(`/api/agents/${id}/check-updates`);
+    renderMyUpdates(id, d);
+  } catch (e) {
+    if (!silent) el.body.textContent = '❌ ' + e.message;
+  }
+}
+
+function renderMyUpdates(id, d) {
+  updCache[id] = d;
+  const el = updBox(id);
+  if (!el) return;
+  const p = d.pricing || {};
+  const price = p.can_use_free
+    ? `<b>offerte</b> (${p.free_updates_left} restante${p.free_updates_left > 1 ? 's' : ''} ce mois-ci)`
+    : `<b>${eur(p.cost_eur)} €</b>`;
+  const cta = `<div class="upd-cta"><button onclick="applyMyUpdate('${id}')">⬆ Mettre à jour mon agent — ${p.can_use_free ? 'offert' : eur(p.cost_eur) + ' €'}</button></div>`;
+  const installed = d.detected
+    ? `<span class="vers">${d.current.webui || '—'}</span>`
+    : '<i>non détectée</i>';
+  const latest = (d.available && d.available.webui)
+    ? `<span class="vers">${d.available.webui}</span>` : '<i>indisponible</i>';
+
+  el.box.classList.toggle('has-update', !d.up_to_date);
+
+  if (d.up_to_date) {
+    el.body.innerHTML = `✅ Votre agent est à jour — version ${installed}.`;
+    return;
+  }
+  if (d.updates && d.updates.length) {
+    el.body.innerHTML =
+      `⬆ <b>Une nouvelle version est disponible.</b><br>` +
+      `Installée : ${installed} — disponible : ${latest}.<br>` +
+      `Mise à jour ${price}.` + cta +
+      `<div class="upd-note">Votre agent redémarre pendant l'opération ` +
+      `(environ une minute) ; ses conversations sont conservées.</div>`;
+    return;
+  }
+  // Version illisible : on ne prétend pas que tout va bien, et on laisse la
+  // main — une nouvelle installation apporte la dernière version publiée.
+  el.body.innerHTML =
+    `Version installée : ${installed} — dernière version publiée : ${latest}.<br>` +
+    `Mise à jour ${price}.` + cta +
+    `<div class="upd-note">La version de votre agent n'a pas pu être lue. ` +
+    `Mettre à jour installe la dernière version publiée.</div>`;
+}
+
+async function applyMyUpdate(id) {
+  const el = updBox(id);
+  if (!confirm("Mettre à jour votre agent maintenant ?\n\nIl redémarre pendant l'opération (environ une minute). Ses conversations sont conservées.")) return;
+  if (el) el.body.textContent = 'Lancement de la mise à jour…';
+  try {
+    const r = await api(`/api/agents/${id}/request-update`, {method:'POST'});
+    if (r.status === 'checkout_created') { location.href = r.checkout_url || `/pay/${r.checkout_id}`; return; }
+    if (el) el.body.innerHTML = '⏳ Mise à jour en cours — votre agent redémarre…';
+    loadTenants();  // le journal d'étapes reprend la main
+    setTimeout(() => checkMyUpdates(id, true), 45000);
+  } catch (e) {
+    if (el) el.body.textContent = '❌ ' + e.message;
+  }
 }
 
 async function restartAgent(id) {

@@ -3,6 +3,33 @@
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/).
 Les dates suivent l'ordre de développement.
 
+## [Non publié — branche de test] — Mises à jour visibles et pilotées par le client
+
+### Ajouté
+- **Bloc « Version de votre agent » dans l'espace client** : la vérification
+  se fait toute seule à l'affichage, le client voit la version installée et la
+  dernière publiée, et déclenche la mise à jour lui-même. Le pilotage
+  n'existait que côté admin.
+- **Lecture de la version RÉELLEMENT installée** (`app/agent_probe.py`) : le
+  template tire ses images sur des tags flottants (`latest`), le tag ne dit
+  donc pas ce qui tourne — un agent fraîchement déployé peut déjà être en
+  retard si l'hôte avait l'image en cache. La plateforme ouvre une session sur
+  l'agent avec le mot de passe qu'elle détient et lit sa version.
+
+### Corrigé
+- **Une mise à jour rejouait un déploiement complet** : `run_job` parcourait
+  toujours les étapes de création au lieu de celles enregistrées dans le job —
+  un agent mis à jour se serait vu attribuer un **second service Coolify**.
+- **Redéploiement sans nouveau tirage d'image** : sur un tag flottant, un
+  déploiement ordinaire réutilise l'image déjà présente sur l'hôte et la mise
+  à jour n'apporte rien. Le déploiement de mise à jour est désormais forcé.
+- **« À jour » affirmé sans rien avoir constaté** : la version amont était
+  recopiée sur l'agent comme s'il l'avait installée. L'état « à jour » ne
+  s'affiche plus que sur une version LUE sur l'agent ; sinon l'interface dit
+  franchement « version non détectée » et laisse la mise à jour possible.
+- Une mise à jour est refusée sur un agent hors ligne, et le règlement ne
+  présume plus les versions : elles sont relues après le redéploiement.
+
 ## [Non publié — branche de test] — Confort d'exploitation
 
 ### Ajouté

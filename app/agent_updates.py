@@ -129,15 +129,22 @@ def check_updates_available(tenant: Tenant, latest_versions: dict[str, str | Non
     return updates
 
 
-def adopt_versions_if_unknown(tenant: Tenant, latest_versions: dict[str, str | None]) -> bool:
-    """Aligne un agent sans version connue sur le relevé amont (référence de
-    départ). Retourne True si quelque chose a été posé."""
+def detect_installed_versions(tenant: Tenant) -> bool:
+    """Interroge l'agent pour connaître sa version réellement installée.
+
+    Indispensable : le template tire des images sur des tags flottants, donc
+    un agent fraîchement déployé peut déjà être en retard (image en cache sur
+    l'hôte). Sans cette lecture, on ne saurait qu'affirmer — à tort — qu'il
+    est à jour. Retourne True si une version a pu être lue."""
+    from . import agent_probe
+
+    found = agent_probe.detect_versions(tenant.instance_url, tenant.instance_password)
     changed = False
-    if not tenant.hermes_webui_version and latest_versions.get("webui"):
-        tenant.hermes_webui_version = latest_versions["webui"]
+    if found.get("webui"):
+        tenant.hermes_webui_version = found["webui"]
         changed = True
-    if not tenant.hermes_agent_version and latest_versions.get("agent"):
-        tenant.hermes_agent_version = latest_versions["agent"]
+    if found.get("agent"):
+        tenant.hermes_agent_version = found["agent"]
         changed = True
     return changed
 
