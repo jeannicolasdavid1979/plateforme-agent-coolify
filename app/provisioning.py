@@ -27,6 +27,12 @@ STEPS = [
     "done",
 ]
 
+UPDATE_STEPS = [
+    "update_service",
+    "health_check",
+    "done",
+]
+
 # L'image nousresearch/hermes-agent ne lit pas HERMES_MODEL : elle lit
 # ~/.hermes/config.yaml. On écrit ce fichier AU DÉMARRAGE DU CONTENEUR
 # (entrypoint injecté dans le compose) — un docker exec depuis le conteneur
@@ -141,11 +147,12 @@ class ProvisioningEngine:
         self.db = db
         self.settings = get_settings()
 
-    def create_job(self, tenant: Tenant) -> ProvisioningJob:
+    def create_job(self, tenant: Tenant, kind: str = "deploy") -> ProvisioningJob:
+        steps_to_use = UPDATE_STEPS if kind == "update" else STEPS
         job = ProvisioningJob(
             tenant_id=tenant.id,
             status="queued",
-            steps=[{"name": s, "status": "pending", "detail": ""} for s in STEPS],
+            steps=[{"name": s, "status": "pending", "detail": ""} for s in steps_to_use],
         )
         self.db.add(job)
         self.db.commit()
@@ -412,3 +419,23 @@ class ProvisioningEngine:
 
     def _step_done(self, tenant: Tenant, job: ProvisioningJob) -> str:
         return "agent prêt"
+
+    # ── Update steps ─────────────────────────────────────────────────
+
+    def _step_update_service(self, tenant: Tenant, job: ProvisioningJob) -> str:
+        """Redéploie le service Coolify avec les versions mises à jour."""
+        client = get_client()
+        if not client or not tenant.coolify_service_uuid:
+            raise RuntimeError("Service Coolify non trouvé")
+
+        svc_uuid = tenant.coolify_service_uuid
+        # Force le re-parse et redéploiement avec pull des nouvelles images
+        if not client.trigger_deploy(svc_uuid):
+            client.restart_service(svc_uuid)
+
+        status = client.wait_running(svc_uuid, timeout=240)
+        if not status or "running" not in status:
+            raise RuntimeError(
+                f"service ne redémarre pas (statut : {status or 'inconnu'})"
+            )
+        return f"agent redéployé avec versions mises à jour ({status})"

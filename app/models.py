@@ -43,6 +43,11 @@ class User(Base):
     consent_at: Mapped[datetime | None] = mapped_column(nullable=True)
     consent_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
+    # Mises à jour d'agents : crédit gratuit/mois (ex: 3 updates gratuites, puis payant)
+    free_updates_monthly: Mapped[int] = mapped_column(Integer, default=3)
+    free_updates_used: Mapped[int] = mapped_column(Integer, default=0)
+    free_updates_reset_at: Mapped[datetime | None] = mapped_column(nullable=True)
+
     tenants: Mapped[list["Tenant"]] = relationship(back_populates="owner")
 
 
@@ -79,6 +84,12 @@ class Tenant(Base):
     openrouter_api_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
     openrouter_key_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
+    # Versioning des conteneurs Docker (pour détection updates et redéploiement)
+    hermes_webui_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    hermes_agent_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_update_check_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    last_update_at: Mapped[datetime | None] = mapped_column(nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(default=_now)
     updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
 
@@ -104,7 +115,7 @@ class Checkout(Base):
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
     tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id"))
-    kind: Mapped[str] = mapped_column(String(16))  # "deploy" | "topup" | "hosting"
+    kind: Mapped[str] = mapped_column(String(16))  # "deploy" | "topup" | "hosting" | "update"
     # Pour un checkout d'hébergement : manual | sub_monthly | sub_annual
     plan: Mapped[str | None] = mapped_column(String(16), nullable=True)
     amount_eur: Mapped[float] = mapped_column(Float)          # à payer (remise déduite)

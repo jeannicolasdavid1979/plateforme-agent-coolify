@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import re
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
@@ -17,7 +18,7 @@ from .hosting import extend_period, hosting_status
 from .models import Checkout, ProvisioningJob, PromoCode, Setting, Tenant, User
 from .openrouter import get_keys_client
 from .provisioning import ProvisioningEngine
-from . import mailer, promo as promo_mod, stripe_pay
+from . import agent_updates, mailer, promo as promo_mod, stripe_pay
 from .security import (
     _is_admin_email,
     create_token,
@@ -93,6 +94,8 @@ class PricingUpdate(BaseModel):
     hosting_grace_days: float | None = None
     hosting_retention_days: float | None = None
     topup_amounts_eur: str | None = None  # liste "5,10,20,50,100"
+    update_cost_eur: float | None = None  # coût d'une mise à jour d'agent
+    free_updates_per_month: float | None = None  # crédits gratuits/mois
 
 
 class TopupRequest(BaseModel):
@@ -129,6 +132,8 @@ PRICING_KEYS = (
     "hosting_annual_eur",
     "hosting_grace_days",
     "hosting_retention_days",
+    "update_cost_eur",
+    "free_updates_per_month",
 )
 
 # Plans d'hébergement → (clé de prix, nombre de mois crédités)
@@ -1129,6 +1134,24 @@ def _apply_paid_checkout(db: Session, checkout: Checkout) -> Tenant | None:
         db.commit()
         return tenant
 
+    if checkout.kind == "update":
+        # Récupère les mises à jour disponibles et les applique
+        latest = agent_updates.get_cached_latest_versions(db)
+        updates = agent_updates.check_updates_available(tenant, latest)
+        if updates:
+            for upd in updates:
+                if upd["component"] == "webui":
+                    tenant.hermes_webui_version = upd["to"]
+                elif upd["component"] == "agent":
+                    tenant.hermes_agent_version = upd["to"]
+        # Crée un ProvisioningJob pour redéployer avec les nouvelles versions
+        engine = ProvisioningEngine(db)
+        job = engine.create_job(tenant, kind="update")
+        tenant.last_update_at = datetime.now(timezone.utc)
+        db.commit()
+        engine.run_job_async(job.id)
+        return tenant
+
     db.commit()
     # Recharge : relever le plafond de la clé OpenRouter dédiée du même montant.
     if checkout.kind == "topup" and tenant.openrouter_key_hash:
@@ -1157,6 +1180,126 @@ def _resume_if_suspended(db: Session, tenant: Tenant) -> None:
         client = get_client()
         if client:
             client.start_service(tenant.coolify_service_uuid)
+
+
+# ── Agent Updates ────────────────────────────────────────────────────
+
+
+@router.get("/api/agents/{agent_id}/check-updates")
+def check_updates(agent_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """Vérifie si des mises à jour sont disponibles pour un agent."""
+    tenant = db.get(Tenant, agent_id)
+    if not tenant or tenant.user_id != user.id:
+        raise HTTPException(404, "Agent introuvable")
+
+    # Utilise le cache (scraping fait en background ou manuellement par admin)
+    latest = agent_updates.get_cached_latest_versions(db)
+    tenant.last_update_check_at = datetime.now(timezone.utc)
+    db.commit()
+
+    # Voir ce qui est disponible
+    updates_available = agent_updates.check_updates_available(tenant, latest)
+    update_cost = agent_updates.get_update_cost_eur(db)
+    can_free = agent_updates.has_free_updates_available(user)
+
+    return {
+        "agent_id": agent_id,
+        "current": {
+            "webui": tenant.hermes_webui_version or "unknown",
+            "agent": tenant.hermes_agent_version or "unknown",
+        },
+        "available": latest,
+        "updates": updates_available,
+        "pricing": {
+            "cost_eur": update_cost,
+            "free_updates_left": max(0, user.free_updates_monthly - user.free_updates_used),
+            "can_use_free": can_free,
+        },
+    }
+
+
+@router.post("/api/agents/{agent_id}/request-update")
+def request_update(agent_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """Demande une mise à jour : crée Checkout (payant) ou débite crédit (gratuit)."""
+    tenant = db.get(Tenant, agent_id)
+    if not tenant or tenant.user_id != user.id:
+        raise HTTPException(404, "Agent introuvable")
+
+    latest = agent_updates.get_cached_latest_versions(db)
+    updates = agent_updates.check_updates_available(tenant, latest)
+    if not updates:
+        raise HTTPException(409, "Aucune mise à jour disponible")
+
+    update_cost = agent_updates.get_update_cost_eur(db)
+    can_free = agent_updates.has_free_updates_available(user)
+
+    # Avant de redéployer, met à jour les versions du tenant
+    def _apply_updates_to_tenant(t: Tenant, upd_list: list[dict]) -> None:
+        for upd in upd_list:
+            if upd["component"] == "webui":
+                t.hermes_webui_version = upd["to"]
+            elif upd["component"] == "agent":
+                t.hermes_agent_version = upd["to"]
+
+    if can_free:
+        agent_updates.consume_free_update(user)
+        _apply_updates_to_tenant(tenant, updates)
+        tenant.last_update_at = datetime.now(timezone.utc)
+        db.commit()
+        # Crée un ProvisioningJob immédiatement pour redéployer
+        engine = ProvisioningEngine(db)
+        job = engine.create_job(tenant, kind="update")
+        db.commit()
+        engine.run_job_async(job.id)
+        return {
+            "status": "free_credit_applied",
+            "job_id": job.id,
+            "updates": updates,
+        }
+    else:
+        # Crée un Checkout payant (les versions seront appliquées après paiement)
+        checkout = Checkout(
+            id=f"chk_{os.urandom(8).hex()}",
+            user_id=user.id,
+            tenant_id=tenant.id,
+            kind="update",
+            amount_eur=update_cost,
+            credit_eur=0.0,
+        )
+        db.add(checkout)
+        db.commit()
+        # Stocke les updates dans la session (sera appliquées dans _apply_paid_checkout)
+        # Pour ça, on utilise un champ temporaire du checkout
+        return {
+            "status": "checkout_created",
+            "checkout_id": checkout.id,
+            "amount_eur": update_cost,
+            "updates": updates,
+        }
+
+
+@router.get("/api/agents/{agent_id}/update-status")
+def update_status(agent_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """Récupère le statut d'une mise à jour en cours."""
+    tenant = db.get(Tenant, agent_id)
+    if not tenant or tenant.user_id != user.id:
+        raise HTTPException(404, "Agent introuvable")
+
+    # Cherche le dernier job de type "update"
+    jobs = [j for j in tenant.jobs if j.status not in ["success", "failed"]]
+    if not jobs:
+        return {
+            "status": "idle",
+            "last_update": tenant.last_update_at,
+        }
+
+    job = jobs[-1]
+    return {
+        "status": job.status,
+        "job_id": job.id,
+        "progress": job.steps[-1] if job.steps else "Initialisation...",
+        "error": job.error,
+    }
 
 
 @router.post("/api/pay/{checkout_id}")

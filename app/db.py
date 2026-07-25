@@ -80,6 +80,14 @@ def init_db():
         "ALTER TABLE users ADD COLUMN reset_token VARCHAR(64)",
         "ALTER TABLE users ADD COLUMN reset_expires DATETIME",
         "ALTER TABLE users ADD COLUMN last_seen DATETIME",
+        # Mises à jour d'agents
+        "ALTER TABLE users ADD COLUMN free_updates_monthly INTEGER NOT NULL DEFAULT 3",
+        "ALTER TABLE users ADD COLUMN free_updates_used INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN free_updates_reset_at DATETIME",
+        "ALTER TABLE tenants ADD COLUMN hermes_webui_version VARCHAR(64)",
+        "ALTER TABLE tenants ADD COLUMN hermes_agent_version VARCHAR(64)",
+        "ALTER TABLE tenants ADD COLUMN last_update_check_at DATETIME",
+        "ALTER TABLE tenants ADD COLUMN last_update_at DATETIME",
     ]
     with engine.connect() as conn:
         for stmt in _MIGRATIONS:

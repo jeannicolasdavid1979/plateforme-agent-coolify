@@ -698,6 +698,16 @@
       </div>
     </div>
 
+    <!-- Mises à jour des agents (Hermes WebUI & Agent) -->
+    <div class="prod-card wide">
+      <div class="prod-head"><span class="prod-ico">🔄</span><h3>Mises à jour des agents</h3></div>
+      <p class="prod-sub">Chaque agent peut être mis à jour vers les dernières versions de Hermes.</p>
+      <div class="inline-fields">
+        <label>Coût par mise à jour (€)<input id="p-update-cost" type="number" min="0" step="0.01"></label>
+        <label>Mises à jour gratuites par mois<input id="p-free-updates" type="number" min="0" step="1"></label>
+      </div>
+    </div>
+
     <div class="row" style="margin-top:24px;align-items:center">
       <button onclick="saveAll()">Enregistrer tous les réglages</button>
       <span id="pricing-msg" class="muted"></span>
@@ -866,6 +876,8 @@ async function loadPricing() {
     if ($('p-hosting-annual')) $('p-hosting-annual').value = pricing.hosting_annual_eur;
     if ($('p-grace')) $('p-grace').value = Math.round(pricing.hosting_grace_days || 0);
     if ($('p-retention')) $('p-retention').value = Math.round(pricing.hosting_retention_days || 30);
+    if ($('p-update-cost')) $('p-update-cost').value = pricing.update_cost_eur || 1.99;
+    if ($('p-free-updates')) $('p-free-updates').value = pricing.free_updates_per_month || 3;
     renderTopupRows();
   } catch (e) { /* valeurs par défaut serveur */ }
 }
@@ -1246,6 +1258,8 @@ async function saveAll() {
       hosting_grace_days: parseInt($('p-grace').value) || 0,
       hosting_retention_days: parseInt($('p-retention').value) || 0,
       topup_amounts_eur: amounts.join(','),
+      update_cost_eur: parseFloat($('p-update-cost').value) || 1.99,
+      free_updates_per_month: parseInt($('p-free-updates').value) || 3,
     })});
     await api('/api/admin/stripe', {method: 'PUT', body: JSON.stringify({
       deploy: $('s-deploy').value.trim(),
@@ -1613,11 +1627,13 @@ function fleetRowHtml(a) {
       <strong>${a.name}</strong> <span class="st ${h.state}">${h.state}</span>
       <div class="who">${a.owner_email} · ${a.subdomain} · crédit ${eur(a.balance_eur)} € · ${h.plan}</div>
       <div class="who">${h.suspended ? 'suppression dans ' : 'échéance dans '} ${cd}</div>
+      <div id="updates-${a.id}" class="who muted" style="font-size:0.9em;margin-top:0.5em"></div>
     </div>
     ${h.suspended
       ? `<button class="ghost" onclick="fleetRestore('${a.id}')">Restaurer</button>`
       : `<button class="ghost" onclick="fleetSuspend('${a.id}')">Suspendre</button>`}
     <button class="ghost" onclick="fleetExtend('${a.id}')">+1 mois offert</button>
+    <button class="ghost" onclick="checkAgentUpdates('${a.id}')">🔄 Updates</button>
     <button class="danger" onclick="fleetDelete('${a.id}','${esc}')">Supprimer</button>
   </div>`;
 }
@@ -1632,6 +1648,56 @@ const fleetExtend  = (id) => fleetAction(`/api/admin/agents/${id}/extend`, 'POST
 function fleetDelete(id, name) {
   if (!confirm(`ADMIN — Supprimer définitivement l'agent « ${name} » (agent + clé + données) ?`)) return;
   fleetAction(`/api/admin/agents/${id}`, 'DELETE');
+}
+async function checkAgentUpdates(agentId) {
+  const msgEl = $(`updates-${agentId}`);
+  if (!msgEl) return;
+  msgEl.textContent = '🔄 Vérification...';
+  try {
+    const r = await api(`/api/agents/${agentId}/check-updates`);
+    if (!r.updates || r.updates.length === 0) {
+      msgEl.textContent = '✅ Aucune mise à jour disponible';
+      return;
+    }
+    const upd = r.updates.map(u => `${u.component} ${u.from} → ${u.to}`).join(', ');
+    const canFree = r.pricing.can_use_free;
+    const cost = canFree ? '(gratuit)' : `(${eur(r.pricing.cost_eur)} €)`;
+    const left = canFree ? `crédits : ${r.pricing.free_updates_left}` : 'payant';
+    msgEl.innerHTML = `📦 ${upd} ${cost} · ${left} <button class="ghost mini" onclick="requestAgentUpdate('${agentId}')">⚡ Mettre à jour</button>`;
+  } catch (e) {
+    msgEl.textContent = `❌ ${e.message}`;
+  }
+}
+async function requestAgentUpdate(agentId) {
+  if (!confirm('Lancer la mise à jour maintenant ?')) return;
+  const msgEl = $(`updates-${agentId}`);
+  msgEl.textContent = '⏳ Traitement...';
+  try {
+    const r = await api(`/api/agents/${agentId}/request-update`, {method:'POST'});
+    if (r.status === 'free_credit_applied') {
+      msgEl.innerHTML = `✅ Mise à jour lancée (crédit gratuit) — <a href="javascript:checkUpdateStatus('${agentId}')">voir l'état</a>`;
+    } else if (r.status === 'checkout_created') {
+      msgEl.innerHTML = `💳 Session paiement créée (${eur(r.amount_eur)} €) — <a href="/pay/${r.checkout_id}">payer et confirmer</a>`;
+    }
+    setTimeout(() => loadFleet(), 2000);
+  } catch (e) {
+    msgEl.textContent = `❌ ${e.message}`;
+  }
+}
+async function checkUpdateStatus(agentId) {
+  const msgEl = $(`updates-${agentId}`);
+  msgEl.textContent = '⏳ Récupération du statut...';
+  try {
+    const r = await api(`/api/agents/${agentId}/update-status`);
+    if (r.status === 'idle') {
+      msgEl.textContent = `✅ Dernière mise à jour : ${r.last_update ? new Date(r.last_update).toLocaleString() : 'jamais'}`;
+    } else {
+      msgEl.textContent = `🔄 ${r.status.toUpperCase()} — ${r.progress || ''}`;
+      if (r.error) msgEl.textContent += ` — ❌ ${r.error}`;
+    }
+  } catch (e) {
+    msgEl.textContent = `❌ ${e.message}`;
+  }
 }
 async function enforceHosting() {
   try { const r = await api('/api/admin/enforce-hosting', {method:'POST'});
