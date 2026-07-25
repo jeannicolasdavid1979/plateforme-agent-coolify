@@ -362,6 +362,17 @@ class ProvisioningEngine:
         if not client.trigger_deploy(svc_uuid):
             client.start_service(svc_uuid)
 
+        # Puis on récupère les DERNIÈRES images : le template suit des tags
+        # flottants, et sans tirage explicite l'hôte sert celles qu'il a déjà
+        # en cache — un agent tout neuf naissait déjà en retard. Non bloquant :
+        # un agent livré sur une image un peu ancienne reste un agent qui
+        # fonctionne, et le client pourra le mettre à jour.
+        if not client.restart_service(svc_uuid, pull_latest=True):
+            logger.warning(
+                "Tirage des dernières images refusé pour %s — agent démarré "
+                "sur les images en cache de l'hôte", tenant.subdomain,
+            )
+
         status = client.wait_running(svc_uuid, timeout=240)
         if not status or "running" not in status:
             # Un service resté 'exited' après création : on retente une fois
@@ -435,11 +446,15 @@ class ProvisioningEngine:
             raise RuntimeError("Service Coolify non trouvé")
 
         svc_uuid = tenant.coolify_service_uuid
-        # SANS CACHE : les images suivent des tags flottants, un déploiement
-        # ordinaire réutiliserait l'image déjà présente sur l'hôte et la mise
-        # à jour n'apporterait rien.
-        if not client.trigger_deploy(svc_uuid, force=True):
-            client.restart_service(svc_uuid)
+        # Le SEUL appel qui met réellement à jour : Coolify exécute alors un
+        # `docker compose pull` — donc les DEUX conteneurs du compose, le
+        # moteur de l'agent comme son interface — puis recrée les conteneurs.
+        # Un simple /deploy réutiliserait les images déjà en cache sur l'hôte.
+        if not client.restart_service(svc_uuid, pull_latest=True):
+            raise RuntimeError(
+                "votre hébergeur a refusé la mise à jour (récupération des "
+                "nouvelles versions impossible)"
+            )
 
         status = client.wait_running(svc_uuid, timeout=300)
         if not status or "running" not in status:

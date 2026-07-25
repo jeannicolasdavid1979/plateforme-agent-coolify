@@ -29,9 +29,20 @@ Les dates suivent l'ordre de développement.
 - **Une mise à jour rejouait un déploiement complet** : `run_job` parcourait
   toujours les étapes de création au lieu de celles enregistrées dans le job —
   un agent mis à jour se serait vu attribuer un **second service Coolify**.
-- **Redéploiement sans nouveau tirage d'image** : sur un tag flottant, un
-  déploiement ordinaire réutilise l'image déjà présente sur l'hôte et la mise
-  à jour n'apporte rien. Le déploiement de mise à jour est désormais forcé.
+- **La mise à jour ne mettait rien à jour.** Elle passait par
+  `/deploy?force=true` — or, dans les sources de Coolify, le contrôleur de
+  l'API appelle `StartService::run($resource)` pour un *Service* **sans le
+  drapeau de tirage d'images** : `force` n'y est lu que pour les
+  *Applications*. L'hôte réutilisait donc ses images en cache. Le seul appel
+  qui met réellement à jour est `POST /services/{uuid}/restart?latest=true`,
+  qui déclenche un `docker compose pull` — couvrant **les deux conteneurs**
+  du compose, le moteur de l'agent comme son interface. Un refus de l'hôte
+  fait maintenant échouer l'étape au lieu d'annoncer un succès en trompe-l'œil.
+- **Un agent neuf naissait déjà en retard** : le premier déploiement ne tirait
+  pas les images non plus, et l'hôte servait celles qu'il avait en cache
+  (constaté : un agent fraîchement déployé en 0.51.92 face à 0.52.149 publié).
+  La livraison récupère désormais les dernières versions — sans bloquer la
+  mise en ligne si l'hôte refuse.
 - **« À jour » affirmé sans rien avoir constaté** : la version amont était
   recopiée sur l'agent comme s'il l'avait installée. L'état « à jour » ne
   s'affiche plus que sur une version LUE sur l'agent ; sinon l'interface dit

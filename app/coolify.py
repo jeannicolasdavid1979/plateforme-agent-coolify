@@ -156,13 +156,14 @@ class CoolifyClient:
             return []
 
     def trigger_deploy(self, svc_uuid: str, force: bool = False) -> bool:
-        """Force un déploiement complet — contrairement à /start, Coolify
-        re-parse le compose et régénère les labels Traefik (donc le domaine).
+        """Déploie le service — contrairement à /start, Coolify re-parse le
+        compose et régénère les labels Traefik (donc le domaine).
 
-        `force=True` demande un déploiement SANS cache : indispensable pour une
-        mise à jour, car les images suivent des tags flottants (`latest`) —
-        sans nouveau tirage, l'hôte réutilise l'image qu'il a déjà et
-        l'« update » ne changerait rien."""
+        ⚠️ `force` NE MET RIEN À JOUR sur un Service : le contrôleur de l'API
+        de Coolify se contente d'appeler `StartService::run($resource)`, sans
+        le drapeau de tirage d'images — le paramètre n'est lu que pour les
+        Applications. Pour récupérer réellement de nouvelles images, passer
+        par `restart_service(pull_latest=True)`."""
         try:
             params = {"uuid": svc_uuid}
             if force:
@@ -186,9 +187,23 @@ class CoolifyClient:
             logger.warning("start refusé : %s", exc)
             return False
 
-    def restart_service(self, svc_uuid: str) -> bool:
+    def restart_service(self, svc_uuid: str, pull_latest: bool = False) -> bool:
+        """Redémarre le service. `pull_latest=True` retire d'abord les images.
+
+        C'est LE seul mécanisme de l'API qui met réellement à jour un service :
+        `POST /services/{uuid}/restart?latest=true` déclenche côté Coolify
+        `RestartService` → `StartService(pullLatestImages: true)`, soit un
+        `docker compose pull` (donc TOUS les conteneurs du compose : le moteur
+        de l'agent ET son interface) suivi d'un `up --force-recreate`.
+
+        À ne pas confondre avec `/deploy?force=true` : pour un Service, le
+        contrôleur de l'API appelle `StartService::run($resource)` sans le
+        drapeau de tirage — le paramètre `force` y est purement ignoré, et
+        l'hôte réutilise les images qu'il a déjà en cache (vérifié dans les
+        sources de Coolify)."""
         try:
-            self._post(f"/api/v1/services/{svc_uuid}/restart")
+            suffix = "?latest=true" if pull_latest else ""
+            self._post(f"/api/v1/services/{svc_uuid}/restart{suffix}")
             return True
         except RuntimeError as exc:
             logger.warning("restart refusé : %s", exc)

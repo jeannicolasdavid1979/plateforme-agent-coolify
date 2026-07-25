@@ -1984,3 +1984,122 @@ def test_a_client_still_cannot_touch_another_agent(monkeypatch):
     assert client.get(f"/api/agents/{aid}/check-updates", headers=intruder).status_code == 404
     assert client.post(f"/api/agents/{aid}/request-update", headers=intruder).status_code == 404
     assert client.get(f"/api/agents/{aid}/update-status", headers=intruder).status_code == 404
+
+
+class _FakeCoolify:
+    """Enregistre les appels passés à l'hébergeur, pour vérifier LEQUEL est
+    utilisé — c'est tout l'enjeu : un appel qui ne tire pas les images donne
+    une « mise à jour » qui ne met rien à jour."""
+
+    def __init__(self, restart_ok=True):
+        self.calls = []
+        self.restart_ok = restart_ok
+
+    def trigger_deploy(self, uuid, force=False):
+        self.calls.append(("deploy", uuid, force)); return True
+
+    def restart_service(self, uuid, pull_latest=False):
+        self.calls.append(("restart", uuid, pull_latest)); return self.restart_ok
+
+    def start_service(self, uuid):
+        self.calls.append(("start", uuid, None)); return True
+
+    def wait_running(self, uuid, timeout=0):
+        return "running"
+
+    def get_password(self, uuid):
+        return "pw"
+
+    def is_healthy(self, url, timeout=0):
+        return True
+
+    def service_status(self, uuid):
+        return "running"
+
+    def service_fqdns(self, uuid):
+        return []
+
+
+def test_update_pulls_the_latest_images_of_both_containers(monkeypatch):
+    """La mise à jour DOIT passer par l'appel qui tire les images.
+
+    Côté Coolify, `/deploy?force=true` ignore le drapeau pour un Service :
+    l'hôte réutilise ses images en cache et l'agent reste sur son ancienne
+    version. Seul `restart?latest=true` déclenche un `docker compose pull`,
+    lequel couvre TOUS les services du compose — le moteur ET l'interface."""
+    from app import provisioning
+    from app.db import SessionFactory
+    from app.models import Tenant
+
+    fake = _FakeCoolify()
+    monkeypatch.setattr(provisioning, "get_client", lambda: fake)
+
+    _headers, aid = _updatable_agent("pull@ex.io", "pull-agent")
+    with SessionFactory() as s:
+        tenant = s.get(Tenant, aid)
+        tenant.coolify_service_uuid = "svc-pull"
+        s.commit()
+        provisioning.ProvisioningEngine(s)._step_update_service(tenant, None)
+
+    assert ("restart", "svc-pull", True) in fake.calls, fake.calls
+    assert not [c for c in fake.calls if c[0] == "deploy"], (
+        "un /deploy ne tire pas les images sur un Service : la mise à jour "
+        "serait sans effet"
+    )
+
+
+def test_update_fails_loudly_when_images_cannot_be_pulled(monkeypatch):
+    """Si l'hébergeur refuse le tirage, on ne fait pas croire au succès."""
+    from app import provisioning
+    from app.db import SessionFactory
+    from app.models import Tenant
+
+    monkeypatch.setattr(provisioning, "get_client", lambda: _FakeCoolify(restart_ok=False))
+    _headers, aid = _updatable_agent("pullfail@ex.io", "pullfail-agent")
+    with SessionFactory() as s:
+        tenant = s.get(Tenant, aid)
+        tenant.coolify_service_uuid = "svc-fail"
+        s.commit()
+        with pytest.raises(RuntimeError, match="refusé la mise à jour"):
+            provisioning.ProvisioningEngine(s)._step_update_service(tenant, None)
+
+
+def test_new_deployment_pulls_the_latest_images(monkeypatch):
+    """Un agent NEUF doit naître sur la dernière version publiée : sans
+    tirage explicite, l'hôte sert l'image qu'il a en cache — c'est ainsi
+    qu'un agent fraîchement déployé se retrouvait déjà en retard."""
+    from app import provisioning
+    from app.db import SessionFactory
+    from app.models import Tenant
+
+    fake = _FakeCoolify()
+    monkeypatch.setattr(provisioning, "get_client", lambda: fake)
+
+    _headers, aid = _updatable_agent("fresh@ex.io", "fresh-agent")
+    with SessionFactory() as s:
+        tenant = s.get(Tenant, aid)
+        tenant.coolify_service_uuid = "svc-fresh"
+        s.commit()
+        provisioning.ProvisioningEngine(s)._step_start_service(tenant, None)
+
+    kinds = [c[0] for c in fake.calls]
+    assert kinds[0] == "deploy"                       # domaine et labels Traefik
+    assert ("restart", "svc-fresh", True) in fake.calls  # puis dernières images
+
+
+def test_new_deployment_survives_a_refused_pull(monkeypatch):
+    """Un tirage refusé ne doit pas faire échouer la livraison : un agent sur
+    une image un peu ancienne reste un agent qui fonctionne, et il pourra
+    être mis à jour ensuite."""
+    from app import provisioning
+    from app.db import SessionFactory
+    from app.models import Tenant
+
+    monkeypatch.setattr(provisioning, "get_client", lambda: _FakeCoolify(restart_ok=False))
+    _headers, aid = _updatable_agent("freshfail@ex.io", "freshfail-agent")
+    with SessionFactory() as s:
+        tenant = s.get(Tenant, aid)
+        tenant.coolify_service_uuid = "svc-freshfail"
+        s.commit()
+        detail = provisioning.ProvisioningEngine(s)._step_start_service(tenant, None)
+    assert detail  # l'étape aboutit malgré tout
