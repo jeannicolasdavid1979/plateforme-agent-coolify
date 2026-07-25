@@ -21,9 +21,11 @@ Les dates suivent l'ordre de développement.
   vérification de version n'acceptait que les agents du compte appelant.
   L'exploitant voyait donc une croix rouge sur un agent parfaitement
   fonctionnel, comme si la plateforme l'avait perdu. L'admin accède désormais
-  à toute la flotte — et sa mise à jour est de la **maintenance** : ni
-  facturée, ni prise sur le quota offert du client. Le cloisonnement entre
-  clients, lui, reste entier.
+  à toute la flotte. **Aucune mise à jour ne lui est facturée** — ni sur ses
+  propres agents, ni sur ceux de ses clients, et jamais sur le quota offert du
+  client, qui n'a rien demandé : il exploite la plateforme, il ne s'achète pas
+  son propre service. Le quota et le paiement ne concernent que les clients ;
+  le cloisonnement entre clients, lui, reste entier.
 - **Une mise à jour rejouait un déploiement complet** : `run_job` parcourait
   toujours les étapes de création au lieu de celles enregistrées dans le job —
   un agent mis à jour se serait vu attribuer un **second service Coolify**.

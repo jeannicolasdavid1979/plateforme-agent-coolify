@@ -1777,10 +1777,14 @@ function renderMyUpdates(id, d) {
   const el = updBox(id);
   if (!el) return;
   const p = d.pricing || {};
-  const price = p.can_use_free
-    ? `<b>offerte</b> (${p.free_updates_left} restante${p.free_updates_left > 1 ? 's' : ''} ce mois-ci)`
-    : `<b>${eur(p.cost_eur)} €</b>`;
-  const cta = `<div class="upd-cta"><button onclick="applyMyUpdate('${id}')">⬆ Mettre à jour mon agent — ${p.can_use_free ? 'offert' : eur(p.cost_eur) + ' €'}</button></div>`;
+  // L'admin ne se facture pas : ni prix affiché, ni décompte de quota.
+  const price = p.admin_free
+    ? '<b>gratuite</b> (compte administrateur)'
+    : p.can_use_free
+      ? `<b>offerte</b> (${p.free_updates_left} restante${p.free_updates_left > 1 ? 's' : ''} ce mois-ci)`
+      : `<b>${eur(p.cost_eur)} €</b>`;
+  const ctaPrice = p.admin_free ? 'gratuit' : p.can_use_free ? 'offert' : eur(p.cost_eur) + ' €';
+  const cta = `<div class="upd-cta"><button onclick="applyMyUpdate('${id}')">⬆ Mettre à jour mon agent — ${ctaPrice}</button></div>`;
   const installed = d.detected
     ? `<span class="vers">${d.current.webui || '—'}</span>`
     : '<i>non détectée</i>';
@@ -2030,7 +2034,7 @@ async function requestAgentUpdate(agentId) {
   try {
     const r = await api(`/api/agents/${agentId}/request-update`, {method:'POST'});
     if (r.status === 'operator_update') {
-      msgEl.innerHTML = `✅ Mise à jour lancée (maintenance admin, non facturée) — <a href="javascript:checkUpdateStatus('${agentId}')">voir l'état</a>`;
+      msgEl.innerHTML = `✅ Mise à jour lancée (admin — non facturée) — <a href="javascript:checkUpdateStatus('${agentId}')">voir l'état</a>`;
     } else if (r.status === 'free_credit_applied') {
       msgEl.innerHTML = `✅ Mise à jour lancée (mise à jour offerte) — <a href="javascript:checkUpdateStatus('${agentId}')">voir l'état</a>`;
     } else if (r.status === 'checkout_created') {

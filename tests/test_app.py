@@ -1889,6 +1889,51 @@ def test_pause_is_per_channel():
                       json={"paused": []}).status_code == 403
 
 
+def test_admin_never_pays_for_an_update(monkeypatch):
+    """L'admin exploite la plateforme : il ne se facture pas lui-même, même
+    sur SES agents et même quota épuisé — aucun paiement ne doit s'interposer."""
+    from app import agent_probe, agent_updates as au
+
+    monkeypatch.setattr(au, "fetch_latest_versions",
+                        lambda timeout=6.0: {"webui": "2.0.0", "agent": "bbbbbbb2"})
+    monkeypatch.setattr(agent_probe, "detect_versions",
+                        lambda url, pw, timeout=8.0: {"webui": "1.0.0", "agent": "bbbbbbb2"})
+
+    admin = _admin("boss-pays-nothing@ex.io")
+    # Quota mis à zéro : un client serait facturé ici.
+    client.put("/api/admin/pricing", headers=admin,
+               json={"update_cost_eur": 9.0, "free_updates_per_month": 0})
+
+    # Un agent appartenant à l'admin lui-même
+    from app.db import SessionFactory
+    from sqlalchemy import select as _select
+    from app.models import Tenant, User as _User
+    from app.hosting import extend_period
+
+    aid = client.post("/api/agents", json={"name": "A moi", "subdomain": "a-moi"},
+                      headers=admin).json()["agent"]["id"]
+    with SessionFactory() as s:
+        tn = s.get(Tenant, aid)
+        tn.status = "running"
+        tn.instance_url = "https://a-moi.example.test"
+        tn.instance_password = "secret"
+        tn.hosting_paid_until = extend_period(None, 1)
+        s.commit()
+
+    d = client.get(f"/api/agents/{aid}/check-updates", headers=admin).json()
+    assert d["pricing"]["admin_free"] is True
+    assert d["pricing"]["can_use_free"] is True  # malgré un quota à zéro
+
+    r = client.post(f"/api/agents/{aid}/request-update", headers=admin)
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "operator_update"   # jamais « checkout_created »
+    assert "checkout_url" not in r.json()
+
+    with SessionFactory() as s:
+        boss = s.scalar(_select(_User).where(_User.email == "boss-pays-nothing@ex.io"))
+        assert boss.free_updates_used == 0           # rien décompté non plus
+
+
 def test_admin_can_check_and_update_a_client_agent(monkeypatch):
     """L'admin exploite la flotte entière : la vérification lancée depuis
     l'admin sur l'agent d'un CLIENT répondait « Agent introuvable », donnant

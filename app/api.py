@@ -1284,6 +1284,7 @@ def check_updates(agent_id: str, user: User = Depends(current_user), db: Session
     left = agent_updates.free_updates_left(user, quota)
     db.commit()
 
+    # L'admin ne paie jamais : l'interface annonce la gratuité au lieu d'un prix.
     return {
         "agent_id": agent_id,
         "current": {"webui": tenant.hermes_webui_version,
@@ -1298,7 +1299,8 @@ def check_updates(agent_id: str, user: User = Depends(current_user), db: Session
         "pricing": {
             "cost_eur": agent_updates.get_update_cost_eur(db),
             "free_updates_left": left,
-            "can_use_free": left > 0,
+            "can_use_free": user.is_admin or left > 0,
+            "admin_free": user.is_admin,
         },
     }
 
@@ -1324,10 +1326,11 @@ def request_update(agent_id: str, user: User = Depends(current_user), db: Sessio
     update_cost = agent_updates.get_update_cost_eur(db)
     quota = agent_updates.get_free_updates_quota(db)
 
-    # L'administrateur intervenant sur l'agent d'un CLIENT fait de la
-    # maintenance : ni son quota offert entamé, ni facture — et surtout pas
-    # le quota du client, qui n'a rien demandé.
-    as_operator = user.is_admin and tenant.user_id != user.id
+    # L'administrateur exploite la plateforme : il ne se facture pas lui-même.
+    # Aucune mise à jour ne lui est comptée, ni sur ses propres agents ni sur
+    # ceux de ses clients — et jamais sur le quota du client, qui n'a rien
+    # demandé. Le quota offert et le paiement ne concernent que les clients.
+    as_operator = user.is_admin
 
     if as_operator or agent_updates.has_free_updates_available(user, quota):
         if not as_operator:
