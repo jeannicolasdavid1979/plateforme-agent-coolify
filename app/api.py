@@ -118,6 +118,9 @@ class StripeLinksUpdate(BaseModel):
     hosting_sub: str | None = None
     hosting_annual: str | None = None
     topup: dict[str, str] | None = None  # {"10": "https://buy.stripe.com/...", ...}
+    # Encaissements suspendus : ["deploy", "hosting_sub", "topup:10"…].
+    # Les liens restent enregistrés ; seul leur usage est neutralisé.
+    paused: list[str] | None = None
 
 
 # ── Pricing (variables business) ─────────────────────────────────────
@@ -1145,8 +1148,15 @@ def _checkout_url(db: Session, checkout: Checkout, *, email: str | None,
        admin + frais − remise) — tout est automatique, rien à configurer
        côté Stripe ; abonnement récurrent pour le plan mensuel ;
     2. Payment Link collé dans l'admin ;
-    3. page de paiement simulée."""
+    3. page de paiement simulée.
+
+    Un encaissement MIS EN PAUSE court-circuite les deux premiers : on retombe
+    aussitôt sur la page simulée. Sans cela, la pause n'aurait aucun effet dès
+    qu'une clé API Stripe est configurée — or c'est précisément dans cette
+    situation qu'on veut tester un parcours sans être débité."""
     tenant = db.get(Tenant, checkout.tenant_id)
+    if stripe_pay.is_paused(db, checkout.kind, amount_eur, plan):
+        return f"/pay/{checkout.id}"
     url = stripe_pay.create_checkout_session(
         checkout_id=checkout.id,
         product_name=_stripe_product_name(checkout, tenant),
@@ -1542,14 +1552,22 @@ padding:36px;width:min(400px,90vw)}}h1{{font-size:20px;margin:0 0 18px}}
 input{{width:100%;padding:12px;margin:8px 0;border-radius:8px;border:1px solid rgba(255,255,255,.2);
 background:rgba(255,255,255,.05);color:#f2f3f7;box-sizing:border-box}}
 button{{width:100%;padding:14px;border:0;border-radius:9px;background:#635bff;color:#fff;font-weight:600;cursor:pointer;margin-top:8px}}
-.msg{{margin-top:14px;font-size:14px}}a{{color:#8aa2ff;font-size:13px;display:inline-block;margin-top:14px}}</style>
+.msg{{margin-top:14px;font-size:14px}}a{{color:#8aa2ff;font-size:13px;display:inline-block;margin-top:14px}}
+.show{{display:flex;gap:8px;align-items:center;font-size:13px;color:#aeb2bd;cursor:pointer;margin-top:4px}}
+.show input{{width:auto;margin:0}}</style>
 </head><body><div class="card"><h1>Choisir un nouveau mot de passe</h1>
 <input id="pw" type="password" placeholder="Nouveau mot de passe (8 caractères min.)" autocomplete="new-password">
 <input id="pw2" type="password" placeholder="Confirmer le mot de passe" autocomplete="new-password">
+<label class="show"><input type="checkbox" onchange="showPw(this.checked)"> Afficher les mots de passe</label>
 <button id="go" onclick="reset()">Réinitialiser</button>
 <div class="msg" id="msg"></div><a href="/">← Retour</a></div>
 <script>
 const token = new URLSearchParams(location.search).get('token') || '{token}';
+// Relire ce qu'on tape évite la faute de frappe invisible, première cause
+// d'un « les deux mots de passe ne correspondent pas » incompréhensible.
+function showPw(on) {{
+  for (const id of ['pw', 'pw2']) document.getElementById(id).type = on ? 'text' : 'password';
+}}
 async function reset() {{
   const pw = document.getElementById('pw').value, pw2 = document.getElementById('pw2').value;
   const msg = document.getElementById('msg');
@@ -1843,6 +1861,7 @@ def get_stripe_links(admin: User = Depends(require_admin), db: Session = Depends
     collée par erreur / refusée / valide)."""
     return {
         "links": stripe_pay.get_links(db),
+        "paused": stripe_pay.get_paused(db),
         "api_enabled": stripe_pay.api_enabled(),
         "api": stripe_pay.api_status(),
         "webhook_configured": bool(get_settings().stripe_webhook_secret),
@@ -1872,7 +1891,9 @@ def update_stripe_links(
         clean = {str(k): str(v).strip() for k, v in body.topup.items() if str(v).strip()}
         _upsert_setting(db, stripe_pay.TOPUP_LINKS_KEY, _json.dumps(clean))
     db.commit()
-    return {"links": stripe_pay.get_links(db)}
+    if body.paused is not None:
+        stripe_pay.set_paused(db, body.paused)
+    return {"links": stripe_pay.get_links(db), "paused": stripe_pay.get_paused(db)}
 
 
 @router.post("/api/admin/agents/{agent_id}/restore")

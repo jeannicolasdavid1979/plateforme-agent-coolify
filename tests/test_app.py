@@ -1785,3 +1785,59 @@ def test_admin_reset_link_works_without_smtp():
     assert client.post("/api/admin/reset-link",
                        headers=_register("intrus@ex.io"),
                        json={"email": "perdu@ex.io"}).status_code == 403
+
+
+def test_paused_channel_falls_back_to_simulated_page(monkeypatch):
+    """Un encaissement en pause n'encaisse plus : le lien reste enregistré,
+    le parcours bascule sur la page simulée — y compris quand une clé API
+    Stripe est configurée (sinon la pause serait sans effet)."""
+    from app import stripe_pay
+
+    admin = _admin("pause-admin@ex.io")
+    link = "https://buy.stripe.com/test_deploy"
+    r = client.put("/api/admin/stripe", headers=admin, json={"deploy": link})
+    assert r.status_code == 200
+
+    # Mode API actif : sans pause, la session Stripe l'emporte
+    monkeypatch.setattr(stripe_pay, "create_checkout_session",
+                        lambda **kw: "https://checkout.stripe.com/c/session_123")
+    headers = _register("pause-buyer@ex.io")
+    url = client.post("/api/agents", json={"name": "P", "subdomain": "p-live"},
+                      headers=headers).json()["checkout_url"]
+    assert url.startswith("https://checkout.stripe.com/")
+
+    # Mise en pause du déploiement
+    r = client.put("/api/admin/stripe", headers=admin, json={"paused": ["deploy"]})
+    assert r.json()["paused"] == ["deploy"]
+    url = client.post("/api/agents", json={"name": "P2", "subdomain": "p-paused"},
+                      headers=headers).json()["checkout_url"]
+    assert url.startswith("/pay/"), url
+
+    # Le lien n'a PAS été effacé : c'est tout l'intérêt de la pause
+    assert client.get("/api/admin/stripe", headers=admin).json()["links"]["deploy"] == link
+
+    # Réactivation : l'encaissement réel reprend, sans rien resaisir
+    client.put("/api/admin/stripe", headers=admin, json={"paused": []})
+    url = client.post("/api/agents", json={"name": "P3", "subdomain": "p-back"},
+                      headers=headers).json()["checkout_url"]
+    assert url.startswith("https://checkout.stripe.com/")
+
+
+def test_pause_is_per_channel():
+    """Chaque produit se met en pause indépendamment — recharges comprises."""
+    from app.db import SessionFactory
+    from app import stripe_pay
+
+    admin = _admin("pause-scope@ex.io")
+    client.put("/api/admin/stripe", headers=admin,
+               json={"paused": ["hosting_sub", "topup:10"]})
+    with SessionFactory() as db:
+        assert stripe_pay.is_paused(db, "hosting", plan="sub_monthly") is True
+        assert stripe_pay.is_paused(db, "hosting", plan="sub_annual") is False
+        assert stripe_pay.is_paused(db, "deploy") is False
+        assert stripe_pay.is_paused(db, "topup", amount_eur=10) is True
+        assert stripe_pay.is_paused(db, "topup", amount_eur=20) is False
+
+    # Réservé à l'admin
+    assert client.put("/api/admin/stripe", headers=_register("pause-intrus@ex.io"),
+                      json={"paused": []}).status_code == 403

@@ -136,10 +136,59 @@ LINK_KEYS = {
 }
 TOPUP_LINKS_KEY = "stripe_links_topup"  # JSON : {"10": "https://buy.stripe.com/...", ...}
 
+# Encaissements mis EN PAUSE : liste JSON d'identifiants (« deploy »,
+# « hosting_sub », « topup:10 »…). Une pause n'efface rien — elle neutralise
+# l'encaissement réel pour ce produit, qui retombe sur la page simulée. C'est
+# le geste de test : essayer un parcours de bout en bout sans être débité et
+# sans avoir à recoller le lien Stripe ensuite.
+PAUSED_KEY = "stripe_links_paused"
+
 
 def _get(db: Session, key: str) -> str:
     row = db.get(Setting, key)
     return (row.value or "").strip() if row else ""
+
+
+def link_id(kind: str, amount_eur: float | None = None, plan: str | None = None) -> str:
+    """Identifiant d'encaissement, tel qu'utilisé dans la liste des pauses."""
+    if kind == "deploy":
+        return "deploy"
+    if kind == "hosting":
+        if plan == "sub_annual":
+            return "hosting_annual"
+        if plan == "sub_monthly":
+            return "hosting_sub"
+        return "hosting_manual"
+    if kind == "topup" and amount_eur is not None:
+        key = str(int(amount_eur)) if float(amount_eur).is_integer() else str(amount_eur)
+        return f"topup:{key}"
+    return kind
+
+
+def get_paused(db: Session) -> list[str]:
+    """Identifiants d'encaissements en pause."""
+    raw = _get(db, PAUSED_KEY)
+    if not raw:
+        return []
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    return [str(v) for v in value] if isinstance(value, list) else []
+
+
+def set_paused(db: Session, ids: list[str]) -> list[str]:
+    """Remplace la liste des encaissements en pause."""
+    clean = sorted({str(i).strip() for i in ids if str(i).strip()})
+    db.merge(Setting(key=PAUSED_KEY, value=json.dumps(clean)))
+    db.commit()
+    return clean
+
+
+def is_paused(db: Session, kind: str, amount_eur: float | None = None,
+              plan: str | None = None) -> bool:
+    """Cet encaissement est-il suspendu ?"""
+    return link_id(kind, amount_eur, plan) in get_paused(db)
 
 
 def get_links(db: Session) -> dict:
@@ -159,6 +208,8 @@ def get_links(db: Session) -> dict:
 
 
 def _link_for(db: Session, kind: str, amount_eur: float | None, plan: str | None) -> str:
+    if is_paused(db, kind, amount_eur, plan):
+        return ""  # en pause : le lien reste enregistré, mais n'est pas servi
     links = get_links(db)
     if kind == "deploy":
         return links["deploy"]

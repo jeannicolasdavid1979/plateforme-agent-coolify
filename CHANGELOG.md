@@ -3,6 +3,24 @@
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/).
 Les dates suivent l'ordre de développement.
 
+## [Non publié — branche de test] — Confort d'exploitation
+
+### Ajouté
+- **Mise en pause d'un encaissement** : chaque produit (déploiement,
+  hébergements, chaque montant de recharge) se suspend d'un clic. Le lien
+  Stripe **reste enregistré** — plus besoin de l'effacer puis de le recoller
+  pour tester ; le parcours bascule sur la page de paiement simulée. La pause
+  court-circuite aussi le mode API, sans quoi elle n'aurait aucun effet dès
+  qu'une clé Stripe est configurée. Un **bandeau d'avertissement** rappelle en
+  permanence ce qui n'encaisse plus, et la carte concernée est teintée.
+- **Mot de passe affichable** (accueil et page de réinitialisation) : une
+  faute de frappe invisible se soldait par un « identifiants invalides »
+  incompréhensible.
+- **Suppression d'agent** : le nom à recopier est affiché avec un bouton
+  « Copier », et le bouton de suppression ne s'arme que si la frappe
+  correspond exactement — garde renforcée et corvée de saisie supprimée.
+  Même fenêtre côté admin, où l'on détruit l'agent d'un client.
+
 ## [Non publié — branche de test] — Reprise en main : accès admin, e-mails, modèle par défaut
 
 ### Corrigé

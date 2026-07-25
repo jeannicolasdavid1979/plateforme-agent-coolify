@@ -290,6 +290,50 @@
   .inline-fields label { flex:1; min-width:160px; margin-top:0; }
   .pill { display:inline-block; font-size:12px; padding:2px 10px; border-radius:999px;
           border:1px solid var(--line); color:var(--muted); }
+  /* Confirmation de suppression : le nom à recopier est affiché et copiable
+     en un clic — la garde reste la frappe exacte, sans la corvée de saisie. */
+  .modal-veil { position:fixed; inset:0; background:rgba(3,3,6,.78); backdrop-filter:blur(6px);
+    display:grid; place-items:center; z-index:200; padding:20px;
+    animation:veilIn .18s var(--ease) both; }
+  @keyframes veilIn { from { opacity:0; } to { opacity:1; } }
+  .modal-box { width:min(480px,100%); background:var(--bg-2); border:1px solid var(--line);
+    border-left:3px solid var(--bad); border-radius:14px; padding:26px;
+    animation:boxIn .22s var(--ease) both; }
+  @keyframes boxIn { from { opacity:0; transform:translateY(10px) scale(.98); } to { opacity:1; transform:none; } }
+  .modal-box h3 { font-size:18px; margin-bottom:10px; }
+  .modal-box p { color:var(--muted); font-size:14px; line-height:1.6; }
+  .modal-name { display:flex; align-items:center; gap:10px; margin:16px 0 6px;
+    padding:11px 14px; border:1px solid var(--line); border-radius:9px;
+    background:var(--surface); }
+  .modal-name code { flex:1; font-size:15px; color:var(--text); user-select:all;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .modal-box input { width:100%; margin-top:10px; }
+  .modal-acts { display:flex; gap:10px; margin-top:18px; }
+  .modal-acts button { flex:1; }
+  .modal-acts button[disabled] { opacity:.4; cursor:not-allowed; }
+
+  /* Relire son mot de passe : une faute de frappe invisible se solde par un
+     « identifiants invalides » qu'on met dix minutes à comprendre. */
+  .pw-field { position:relative; }
+  .pw-field input { padding-right:44px; }
+  .pw-eye { position:absolute; right:6px; top:50%; transform:translateY(-50%);
+    background:none; border:0; padding:6px 8px; font-size:16px; line-height:1;
+    cursor:pointer; opacity:.55; width:auto; margin:0; }
+  .pw-eye:hover, .pw-eye.on { opacity:1; }
+
+  /* Encaissement en pause : impossible à louper, et le rappel suit la carte
+     concernée pour qu'on sache TOUJOURS ce qui n'encaisse plus réellement. */
+  .pause-banner { margin:14px 0 4px; padding:12px 16px; border-radius:12px;
+    border:1px solid #e0a23a; background:rgba(224,162,58,.10); color:#f0c274;
+    font-size:14px; line-height:1.55; animation:pausePulse 2.4s ease-in-out infinite; }
+  .pause-banner b { color:#ffd79a; }
+  @keyframes pausePulse { 0%,100% { border-color:#e0a23a; } 50% { border-color:#ffcf85; } }
+  .pause-chip { display:inline-block; margin-left:8px; font-size:11px; padding:2px 9px;
+    border-radius:999px; border:1px solid #e0a23a; color:#f0c274;
+    background:rgba(224,162,58,.12); cursor:pointer; user-select:none; }
+  .pause-chip.live { border-color:var(--line); color:var(--muted); background:none; }
+  .prod-card.is-paused { border-color:#e0a23a; background:rgba(224,162,58,.05); }
+  .topup-row.is-paused .tr-link { border-color:#e0a23a; }
   .topup-rows { margin:14px 0 10px; display:flex; flex-direction:column; gap:8px; }
   .topup-row { display:flex; gap:8px; align-items:center; }
   .topup-row .tr-amount { max-width:110px; }
@@ -456,7 +500,11 @@
     <h2 style="margin-top:14px">Créez votre compte</h2>
     <p class="muted" style="margin-top:-4px;font-size:14px">Chaque champ rempli envoie une impulsion au laboratoire.</p>
     <input id="email" type="email" placeholder="email@exemple.com" autocomplete="email">
-    <input id="password" type="password" placeholder="mot de passe (8+ caractères)" autocomplete="current-password">
+    <div class="pw-field">
+      <input id="password" type="password" placeholder="mot de passe (8+ caractères)" autocomplete="current-password">
+      <button type="button" class="pw-eye" id="pw-eye" onclick="togglePassword()"
+              title="Afficher le mot de passe" aria-label="Afficher le mot de passe">👁</button>
+    </div>
     <label class="consent" style="display:flex;gap:9px;align-items:flex-start;margin-top:12px;font-size:13px;color:var(--muted);cursor:pointer">
       <input id="accept-terms" type="checkbox" style="margin-top:3px;width:auto;flex:0 0 auto">
       <span>Je crée un compte et j'accepte les
@@ -614,11 +662,12 @@
       (frais et codes promo compris) — les liens ne servent alors que de repli. Sans clé ni lien,
       la page de paiement simulée reste utilisée. Webhook : <code>/api/stripe/webhook</code>.
       <span id="stripe-mode" class="pill"></span> <span id="wh-state" class="pill"></span></p>
+    <div id="pause-banner" class="pause-banner hidden"></div>
 
     <div class="prod-grid">
       <!-- Déploiement -->
       <div class="prod-card">
-        <div class="prod-head"><span class="prod-ico">🚀</span><h3>Déploiement</h3></div>
+        <div class="prod-head"><span class="prod-ico">🚀</span><h3>Déploiement</h3><span id="pause-deploy"></span></div>
         <p class="prod-sub">Frais unique de création de l'agent (1er mois d'hébergement inclus).</p>
         <label>Prix (€)<input id="p-deploy" type="number" min="0" step="0.5"></label>
         <label>Crédit IA offert (€)<input id="p-credit" type="number" min="0" step="0.5"></label>
@@ -627,7 +676,7 @@
 
       <!-- Hébergement sans engagement -->
       <div class="prod-card">
-        <div class="prod-head"><span class="prod-ico">📅</span><h3>Hébergement — sans engagement</h3></div>
+        <div class="prod-head"><span class="prod-ico">📅</span><h3>Hébergement — sans engagement</h3><span id="pause-hosting_manual"></span></div>
         <p class="prod-sub">Location au mois, prolongation <b>manuelle</b> avant l'échéance (chrono FOMO).</p>
         <label>Prix / mois (€)<input id="p-hosting-manual" type="number" min="0" step="1"></label>
         <label>Lien Stripe <span class="hint">paiement unique</span><input id="s-host-manual" type="url" placeholder="https://buy.stripe.com/…"></label>
@@ -635,7 +684,7 @@
 
       <!-- Abonnement mensuel auto -->
       <div class="prod-card featured">
-        <div class="prod-head"><span class="prod-ico">♾️</span><h3>Abonnement mensuel</h3><span class="prod-tag">recommandé</span></div>
+        <div class="prod-head"><span class="prod-ico">♾️</span><h3>Abonnement mensuel</h3><span class="prod-tag">recommandé</span><span id="pause-hosting_sub"></span></div>
         <p class="prod-sub">Prélèvement <b>automatique</b> Stripe, engagé 12 mois. Moins cher, sans effort.</p>
         <label>Prix / mois (€)<input id="p-hosting-sub" type="number" min="0" step="1"></label>
         <label>Lien Stripe <span class="hint">abonnement récurrent</span><input id="s-host-sub" type="url" placeholder="https://buy.stripe.com/…"></label>
@@ -643,7 +692,7 @@
 
       <!-- Abonnement annuel -->
       <div class="prod-card">
-        <div class="prod-head"><span class="prod-ico">🎁</span><h3>Abonnement annuel</h3></div>
+        <div class="prod-head"><span class="prod-ico">🎁</span><h3>Abonnement annuel</h3><span id="pause-hosting_annual"></span></div>
         <p class="prod-sub">12 mois payés en une fois, <b>un mois offert</b>.</p>
         <label>Prix / an (€)<input id="p-hosting-annual" type="number" min="0" step="1"></label>
         <label>Lien Stripe <span class="hint">paiement unique</span><input id="s-host-annual" type="url" placeholder="https://buy.stripe.com/…"></label>
@@ -802,6 +851,9 @@ let pricing = { deploy_price_eur: 0, topup_amount_eur: 0, initial_credit_eur: 0,
                 hosting_manual_eur: 29, hosting_sub_monthly_eur: 19, hosting_annual_eur: 209,
                 hosting_grace_days: 0, hosting_retention_days: 30, topup_amounts_eur: [] };
 let stripeLinks = { deploy: '', hosting_manual: '', hosting_sub: '', hosting_annual: '', topup: {} };
+// Encaissements suspendus (« deploy », « topup:10 »…). Le lien Stripe reste
+// saisi : seule son utilisation est neutralisée, le temps des tests.
+let pausedLinks = [];
 const eur = (n) => Number(n || 0).toFixed(2).replace('.', ',');
 
 function errorMessage(detail, fallback) {
@@ -897,11 +949,75 @@ async function loadPricing() {
   } catch (e) { /* valeurs par défaut serveur */ }
 }
 
+// ── Encaissements en pause ──────────────────────────────────────────
+// Mettre un encaissement en pause n'efface pas son lien Stripe : le parcours
+// bascule sur la page de paiement simulée, le temps de tester. Un rappel
+// permanent évite d'oublier qu'un produit n'encaisse plus réellement.
+const PAUSE_LABELS = {
+  deploy: 'Déploiement',
+  hosting_manual: 'Hébergement sans engagement',
+  hosting_sub: 'Abonnement mensuel',
+  hosting_annual: 'Abonnement annuel',
+};
+const pauseLabel = (id) => PAUSE_LABELS[id]
+  || (id.startsWith('topup:') ? `Recharge ${id.slice(6)} €` : id);
+const isPaused = (id) => pausedLinks.includes(id);
+
+function togglePause(id) {
+  pausedLinks = isPaused(id) ? pausedLinks.filter(x => x !== id) : pausedLinks.concat([id]);
+  renderPauseState();
+  savePauseState();
+}
+
+async function savePauseState() {
+  try {
+    await api('/api/admin/stripe', {method: 'PUT', body: JSON.stringify({paused: pausedLinks})});
+  } catch (e) { alert(e.message); }
+}
+
+function pauseChipHtml(id) {
+  const p = isPaused(id);
+  return `<span class="pause-chip ${p ? '' : 'live'}" onclick="togglePause('${id}')"
+    title="${p ? 'Réactiver l’encaissement réel' : 'Suspendre sans effacer le lien'}"
+    >${p ? '⏸ En pause' : '▶ Actif'}</span>`;
+}
+
+function renderPauseState() {
+  ['deploy', 'hosting_manual', 'hosting_sub', 'hosting_annual'].forEach(id => {
+    const el = $('pause-' + id);
+    if (!el) return;
+    el.innerHTML = pauseChipHtml(id);
+    const card = el.closest('.prod-card');
+    if (card) card.classList.toggle('is-paused', isPaused(id));
+  });
+  document.querySelectorAll('#topup-rows .topup-row').forEach(row => {
+    const amount = row.querySelector('.tr-amount').value.trim();
+    const holder = row.querySelector('.tr-pause');
+    if (!holder) return;
+    const id = amount ? `topup:${amount}` : '';
+    holder.innerHTML = id ? pauseChipHtml(id) : '';
+    row.classList.toggle('is-paused', !!id && isPaused(id));
+  });
+
+  const banner = $('pause-banner');
+  if (!banner) return;
+  const active = pausedLinks.filter(id => PAUSE_LABELS[id] || id.startsWith('topup:'));
+  banner.classList.toggle('hidden', active.length === 0);
+  if (active.length) {
+    banner.innerHTML = `⏸ <b>${active.length} encaissement${active.length > 1 ? 's' : ''} en pause</b> — ` +
+      active.map(pauseLabel).join(', ') + '.<br>' +
+      "Ces produits <b>n'encaissent plus réellement</b> : le client arrive sur la page de " +
+      "paiement simulée et l'agent se déploie sans être facturé. Les liens Stripe restent " +
+      'enregistrés — réactivez-les avant de rouvrir les ventes.';
+  }
+}
+
 // Lignes de recharge : chaque montant proposé + son lien Stripe, groupés.
 function topupRowHtml(amount, link) {
   return `<div class="topup-row">
     <input class="tr-amount" type="number" min="0" step="0.5" value="${amount != null ? amount : ''}" placeholder="€">
     <input class="tr-link" type="url" value="${(link || '').replace(/"/g, '&quot;')}" placeholder="Lien Stripe (optionnel)">
+    <span class="tr-pause"></span>
     <button class="ghost mini" type="button" onclick="this.parentNode.remove()" title="Retirer">×</button>
   </div>`;
 }
@@ -912,6 +1028,7 @@ function renderTopupRows() {
   const links = stripeLinks.topup || {};
   const key = (a) => (Number.isInteger(a) ? String(a) : String(a));
   box.innerHTML = amounts.map(a => topupRowHtml(a, links[key(a)])).join('') || topupRowHtml('', '');
+  renderPauseState();
 }
 function addTopupRow() {
   const box = $('topup-rows');
@@ -1274,11 +1391,13 @@ async function loadStripe() {
   try {
     const d = await api('/api/admin/stripe');
     stripeLinks = Object.assign({topup: {}}, d.links || {});
+    pausedLinks = d.paused || [];
     $('s-deploy').value = stripeLinks.deploy || '';
     $('s-host-manual').value = stripeLinks.hosting_manual || '';
     $('s-host-sub').value = stripeLinks.hosting_sub || '';
     $('s-host-annual').value = stripeLinks.hosting_annual || '';
     renderTopupRows();  // réaffiche les lignes avec leurs liens
+    renderPauseState();
     if ($('stripe-mode')) $('stripe-mode').textContent = (d.api && d.api.state === 'ok')
       ? '✔ API Stripe : ' + d.api.detail
       : '⚠ API Stripe : ' + ((d.api && d.api.detail) || 'état inconnu');
@@ -1321,6 +1440,7 @@ async function saveAll() {
       hosting_sub: $('s-host-sub').value.trim(),
       hosting_annual: $('s-host-annual').value.trim(),
       topup,
+      paused: pausedLinks,
     })});
     msg.textContent = '✔ Tous les réglages enregistrés';
     await loadStripe();
@@ -1626,11 +1746,64 @@ async function topup(id, amount) {
 
 // Suppression : double garde-fou. 1) anti-fausse-manip. 2) rappel que c'est
 // irréversible, avec saisie du nom pour confirmer.
+// La garde reste la même — recopier le nom exact — mais le nom est affiché et
+// copiable en un clic, et le bouton ne s'arme que si la frappe correspond :
+// impossible de supprimer d'un doigt qui glisse, sans corvée de saisie.
+function confirmByName(name, { title, warning, confirmLabel }) {
+  return new Promise(resolve => {
+    const veil = document.createElement('div');
+    veil.className = 'modal-veil';
+    veil.innerHTML = `
+      <div class="modal-box" role="dialog" aria-modal="true">
+        <h3>${title}</h3>
+        <p>${warning}</p>
+        <div class="modal-name">
+          <code id="cbn-name"></code>
+          <button class="ghost mini" type="button" id="cbn-copy">Copier</button>
+        </div>
+        <p class="muted">Recopiez ce nom exactement pour confirmer.</p>
+        <input id="cbn-input" type="text" placeholder="nom de l'agent" autocomplete="off" spellcheck="false">
+        <div class="modal-acts">
+          <button class="ghost" type="button" id="cbn-cancel">Annuler</button>
+          <button class="danger" type="button" id="cbn-ok" disabled>${confirmLabel}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(veil);
+    veil.querySelector('#cbn-name').textContent = name;
+
+    const input = veil.querySelector('#cbn-input');
+    const okBtn = veil.querySelector('#cbn-ok');
+    const close = (result) => {
+      document.removeEventListener('keydown', onKey);
+      veil.remove();
+      resolve(result);
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') close(false);
+      if (e.key === 'Enter' && !okBtn.disabled) close(true);
+    };
+
+    input.addEventListener('input', () => { okBtn.disabled = input.value.trim() !== name; });
+    veil.querySelector('#cbn-copy').addEventListener('click', function () {
+      copyText(name, this);
+      input.focus();
+    });
+    veil.querySelector('#cbn-cancel').addEventListener('click', () => close(false));
+    okBtn.addEventListener('click', () => close(true));
+    veil.addEventListener('mousedown', (e) => { if (e.target === veil) close(false); });
+    document.addEventListener('keydown', onKey);
+    input.focus();
+  });
+}
+
 async function destroy(id, name) {
-  if (!confirm(`Supprimer l'agent « ${name} » ?\n\nVotre agent sera arrêté et détruit. Vérifiez que vous ne vous êtes pas trompé d'agent.`)) return;
-  const typed = prompt(`⚠️ DÉFINITIF ET NON REMBOURSABLE.\n\nCette suppression est irréversible : votre agent, ses données et le crédit restant seront perdus.\n\nPour confirmer, tapez le nom de l'agent : ${name}`);
-  if (typed === null) return;
-  if (typed.trim() !== name) { alert('Le nom ne correspond pas — suppression annulée.'); return; }
+  const confirmed = await confirmByName(name, {
+    title: '⚠️ Suppression définitive et non remboursable',
+    warning: "Votre agent sera arrêté et détruit. Ses données et le crédit restant " +
+             "seront perdus — cette action est irréversible.",
+    confirmLabel: 'Supprimer définitivement',
+  });
+  if (!confirmed) return;
   try {
     await api(`/api/agents/${id}`, {method:'DELETE'});
     Lab.event('delete');  // l'agent est foudroyé par survoltage ⚡
@@ -1640,6 +1813,18 @@ async function destroy(id, name) {
 
 // ── Mot de passe oublié & vérification e-mail ───────────────────────
 function toggleForgot(e) { e.preventDefault(); $('forgot').classList.toggle('hidden'); }
+
+// Afficher le mot de passe en clair : on relit ce qu'on tape avant de valider.
+function togglePassword() {
+  const input = $('password'), eye = $('pw-eye');
+  const shown = input.type === 'text';
+  input.type = shown ? 'password' : 'text';
+  eye.textContent = shown ? '👁' : '🙈';
+  eye.classList.toggle('on', !shown);
+  const label = shown ? 'Afficher le mot de passe' : 'Masquer le mot de passe';
+  eye.title = label; eye.setAttribute('aria-label', label);
+  input.focus();
+}
 
 async function forgotPassword() {
   const em = $('forgot-email').value.trim() || $('email').value.trim();
@@ -1699,9 +1884,15 @@ async function fleetAction(url, method='POST', body) {
 const fleetSuspend = (id) => fleetAction(`/api/admin/agents/${id}/suspend`);
 const fleetRestore = (id) => fleetAction(`/api/admin/agents/${id}/restore`);
 const fleetExtend  = (id) => fleetAction(`/api/admin/agents/${id}/extend`, 'POST', JSON.stringify({months:1}));
-function fleetDelete(id, name) {
-  if (!confirm(`ADMIN — Supprimer définitivement l'agent « ${name} » (agent + clé + données) ?`)) return;
-  fleetAction(`/api/admin/agents/${id}`, 'DELETE');
+async function fleetDelete(id, name) {
+  // Côté admin on détruit l'agent d'un CLIENT : même garde, même confort.
+  const confirmed = await confirmByName(name, {
+    title: '⚠️ ADMIN — Suppression définitive',
+    warning: "L'agent d'un client, sa clé et ses données seront détruits. " +
+             'Cette action est irréversible.',
+    confirmLabel: 'Supprimer définitivement',
+  });
+  if (confirmed) fleetAction(`/api/admin/agents/${id}`, 'DELETE');
 }
 async function checkAgentUpdates(agentId) {
   const msgEl = $(`updates-${agentId}`);
