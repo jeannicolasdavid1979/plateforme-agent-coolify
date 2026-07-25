@@ -1664,3 +1664,124 @@ def test_db_diagnostics_reports_persistence():
     assert "database" in sysinfo
     assert sysinfo["database"]["level"] in ("ok", "critical")
     assert sysinfo["database"]["users"] >= 1
+
+
+def test_default_model_is_gpt_4o_mini():
+    """Le modèle par défaut d'un agent créé sans choix explicite."""
+    from app.config import get_settings
+
+    assert get_settings().default_model == "openai/gpt-4o-mini"
+    headers = _register("defaultmodel@ex.io")
+    r = client.post("/api/agents", json={"name": "D", "subdomain": "d-model"}, headers=headers)
+    assert r.json()["agent"]["model"] == "openai/gpt-4o-mini"
+
+
+def test_admin_bootstrap_creates_then_resets_admin(monkeypatch):
+    """Levier de secours : reprendre la main sans dépendre de l'e-mail."""
+    from app import bootstrap
+    from app.config import get_settings
+    from app.db import SessionFactory
+    from app.models import User
+    from sqlalchemy import select as _select
+
+    monkeypatch.setenv("ADMIN_EMAILS", "secours@ex.io")
+    monkeypatch.setenv("ADMIN_BOOTSTRAP_PASSWORD", "secours-solide-1")
+    get_settings.cache_clear()
+    try:
+        # Le compte n'existe pas : il est créé, admin et adresse déjà vérifiée
+        assert bootstrap.apply_admin_bootstrap() == ["secours@ex.io"]
+        r = client.post("/api/auth/login",
+                        json={"email": "secours@ex.io", "password": "secours-solide-1"})
+        assert r.status_code == 200
+        me = client.get("/api/auth/me",
+                        headers={"Authorization": f"Bearer {r.json()['token']}"}).json()
+        assert me["is_admin"] is True and me["email_verified"] is True
+
+        # Le compte existe : le mot de passe est réinitialisé (cas réel du
+        # verrouillage dehors), l'ancien ne fonctionne plus
+        monkeypatch.setenv("ADMIN_BOOTSTRAP_PASSWORD", "nouveau-mot-de-passe-2")
+        get_settings.cache_clear()
+        bootstrap.apply_admin_bootstrap()
+        assert client.post("/api/auth/login",
+                           json={"email": "secours@ex.io", "password": "secours-solide-1"}
+                           ).status_code == 401
+        assert client.post("/api/auth/login",
+                           json={"email": "secours@ex.io", "password": "nouveau-mot-de-passe-2"}
+                           ).status_code == 200
+    finally:
+        get_settings.cache_clear()
+
+    with SessionFactory() as s:  # un seul compte, pas de doublon
+        assert len(s.scalars(_select(User).where(User.email == "secours@ex.io")).all()) == 1
+
+
+def test_admin_bootstrap_refuses_weak_or_unaddressed(monkeypatch):
+    """Sans destinataire ou avec un mot de passe trop court : aucun effet."""
+    from app import bootstrap
+    from app.config import get_settings
+
+    monkeypatch.setenv("ADMIN_EMAILS", "")
+    monkeypatch.setenv("ADMIN_BOOTSTRAP_PASSWORD", "peu-importe-1")
+    get_settings.cache_clear()
+    assert bootstrap.apply_admin_bootstrap() == []
+
+    monkeypatch.setenv("ADMIN_EMAILS", "court@ex.io")
+    monkeypatch.setenv("ADMIN_BOOTSTRAP_PASSWORD", "court")
+    get_settings.cache_clear()
+    assert bootstrap.apply_admin_bootstrap() == []
+    get_settings.cache_clear()
+
+
+def test_smtp_implicit_tls_detected_from_port(monkeypatch):
+    """Le port 465 impose un TLS implicite — un STARTTLS y reste muet."""
+    from app import mailer
+    from app.config import get_settings
+
+    monkeypatch.setenv("SMTP_PORT", "465")
+    get_settings.cache_clear()
+    assert mailer.use_implicit_tls() is True
+
+    monkeypatch.setenv("SMTP_PORT", "587")
+    get_settings.cache_clear()
+    assert mailer.use_implicit_tls() is False
+
+    monkeypatch.setenv("SMTP_SSL", "true")  # réglage explicite prioritaire
+    get_settings.cache_clear()
+    assert mailer.use_implicit_tls() is True
+    get_settings.cache_clear()
+
+
+def test_admin_email_state_and_test_report_cause():
+    """L'admin voit que le SMTP manque, et le test en donne la raison."""
+    admin = _admin("mailstate@ex.io")
+    d = client.get("/api/admin/email", headers=admin).json()
+    assert d["configured"] is False
+    assert "SMTP_HOST" in d["advice"]
+    assert "password" not in d  # aucun secret exposé
+
+    r = client.post("/api/admin/email/test", headers=admin).json()
+    assert r["sent"] is False
+    assert "SMTP_HOST" in r["message"]
+
+
+def test_admin_reset_link_works_without_smtp():
+    """Dépanner un client sans e-mail : lien généré puis mot de passe changé."""
+    _register("perdu@ex.io")
+    admin = _admin("resetadmin@ex.io")
+
+    r = client.post("/api/admin/reset-link", headers=admin, json={"email": "perdu@ex.io"})
+    assert r.status_code == 200
+    token = r.json()["link"].split("token=")[1]
+
+    assert client.post("/api/auth/reset",
+                       json={"token": token, "password": "tout-nouveau-1"}).status_code == 200
+    assert client.post("/api/auth/login",
+                       json={"email": "perdu@ex.io", "password": "tout-nouveau-1"}
+                       ).status_code == 200
+
+    assert client.post("/api/admin/reset-link", headers=admin,
+                       json={"email": "inconnu@ex.io"}).status_code == 404
+    # Réservé à l'admin
+    assert client.post("/api/admin/reset-link",
+                       headers=_register("intrus@ex.io"),
+                       json={"email": "perdu@ex.io"}).status_code == 403

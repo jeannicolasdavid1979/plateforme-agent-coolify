@@ -3,6 +3,42 @@
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/).
 Les dates suivent l'ordre de développement.
 
+## [Non publié — branche de test] — Reprise en main : accès admin, e-mails, modèle par défaut
+
+### Corrigé
+- **Création d'agent en erreur 500** : `update_cost_eur` et
+  `free_updates_per_month` avaient rejoint les clés de tarification sans valeur
+  par défaut, faisant échouer la lecture des prix. L'agent était créé puis le
+  paiement échouait — d'où le « sous-domaine déjà existant » au second essai.
+  Un test refuse désormais toute clé de tarification sans valeur par défaut.
+- **Réglages de mise à jour sans effet** : ils étaient écrits sous une clé et
+  lus sous une autre ; l'admin les pilote réellement.
+- **Mise à jour facturée à vide** : un agent dont la version n'a jamais été
+  relevée n'est plus déclaré « en retard ». Le premier relevé pose sa
+  référence, les écarts suivants sont réels.
+- **Port SMTP 465** : le TLS implicite n'était pas géré — une connexion
+  STARTTLS y reste muette jusqu'au délai d'attente, d'où des e-mails qui « ne
+  partent pas » sans erreur visible. Le mode est déduit du port, `SMTP_SSL`
+  permet de le forcer.
+
+### Ajouté
+- **Levier de secours pour l'accès admin** (`ADMIN_BOOTSTRAP_PASSWORD`) : le
+  « mot de passe oublié » suppose un SMTP opérationnel ; sans lui, l'exploitant
+  n'avait aucun recours. La variable (ré)applique un mot de passe aux comptes
+  d'`ADMIN_EMAILS` à chaque démarrage — à retirer une fois la main reprise.
+- **Panneau « E-mails » en admin** : état de la configuration, envoi d'un
+  e-mail de test renvoyant la cause exacte d'un échec, et génération d'un
+  **lien de réinitialisation** à transmettre de la main à la main — de quoi
+  dépanner un client sans attendre la réparation du SMTP.
+- **Diagnostic de persistance** : au démarrage et dans la supervision admin,
+  l'application dit où sa base est écrite et si un volume la protège. Un
+  redéploiement sans volume monté fait « disparaître » comptes et agents ;
+  c'est désormais visible avant d'y perdre des données.
+
+### Modifié
+- **Modèle par défaut : `openai/gpt-4o-mini`** (au lieu de `gpt-4o`) — pour la
+  configuration, les nouveaux agents et le sélecteur du parcours d'achat.
+
 ## [Non publié — branche de test] — Import manuel des médias de l'Atelier
 
 ### Ajouté

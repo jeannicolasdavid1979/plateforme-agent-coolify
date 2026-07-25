@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     jwt_secret: str = "change-me"
     jwt_ttl_hours: int = 72
     admin_emails: str = ""
+    # Levier de secours pour reprendre la main sur le compte admin quand
+    # l'e-mail de réinitialisation n'est pas disponible (voir app/bootstrap.py).
+    # Appliqué à CHAQUE démarrage tant qu'il est défini : à retirer ensuite.
+    admin_bootstrap_password: str = ""
 
     # Coolify API
     coolify_api_url: str = "https://coolify.kechlab.com"
@@ -34,7 +38,7 @@ class Settings(BaseSettings):
     # Plan
     plan_price_cents: int = 2900
     plan_monthly_credits_eur: float = 20.0
-    default_model: str = "openai/gpt-4o"
+    default_model: str = "openai/gpt-4o-mini"
 
     # Business — valeurs par défaut, modifiables par l'admin (table settings)
     deploy_price_eur: float = 29.0
@@ -81,6 +85,10 @@ class Settings(BaseSettings):
     smtp_password: str = ""
     smtp_from: str = ""          # défaut : legal_contact_email si vide
     smtp_starttls: bool = True
+    # TLS implicite (SMTPS). Laissé vide = déduit du port : 465 → TLS implicite,
+    # sinon STARTTLS. Beaucoup de fournisseurs (OVH, Gmail) n'exposent que 465,
+    # sur lequel une connexion STARTTLS reste muette jusqu'au délai d'attente.
+    smtp_ssl: bool | None = None
     # Base publique pour les liens des e-mails (défaut : site_url).
     public_base_url: str = ""
     # Montants de recharge proposés au client (liste, en euros). Chaque euro

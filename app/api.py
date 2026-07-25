@@ -78,7 +78,7 @@ class AdminExtend(BaseModel):
 class CreateAgentRequest(BaseModel):
     name: str
     subdomain: str
-    model: str = "openai/gpt-4o"
+    model: str = "openai/gpt-4o-mini"
     system_prompt: str = ""
     promo_code: str | None = None
 
@@ -810,6 +810,49 @@ def forgot_password(body: ForgotRequest, db: Session = Depends(get_db)):
         db.commit()
         mailer.send_password_reset(user.email, user.reset_token)
     return {"status": "ok"}
+
+
+@router.get("/api/admin/email")
+def admin_email_state(admin: User = Depends(require_admin)):
+    """Configuration e-mail vue par l'admin : est-elle opérationnelle, et si
+    non, que renseigner. Aucun secret n'est renvoyé."""
+    return mailer.diagnostics()
+
+
+@router.post("/api/admin/email/test")
+def admin_email_test(admin: User = Depends(require_admin)):
+    """Envoie un e-mail de test à l'admin connecté et renvoie la cause exacte
+    en cas d'échec (authentification, port, chiffrement)."""
+    sent, message = mailer.send_test(admin.email)
+    return {"sent": sent, "message": message, "to": admin.email}
+
+
+class ResetLinkRequest(BaseModel):
+    email: str
+
+
+@router.post("/api/admin/reset-link")
+def admin_reset_link(body: ResetLinkRequest, admin: User = Depends(require_admin),
+                     db: Session = Depends(get_db)):
+    """Fabrique un lien de réinitialisation à transmettre de la main à la main.
+
+    Sert quand l'e-mail ne part pas : sans cela, un client qui perd son mot de
+    passe n'a aucun recours tant que le SMTP n'est pas réparé."""
+    from datetime import timedelta
+
+    email = body.email.strip().lower()
+    user = db.scalar(select(User).where(User.email == email))
+    if not user:
+        raise HTTPException(404, "Aucun compte avec cette adresse")
+    user.reset_token = new_token()
+    user.reset_expires = datetime.now(timezone.utc) + timedelta(hours=1)
+    db.commit()
+    base = mailer.public_base_url() or ""
+    return {
+        "email": user.email,
+        "link": f"{base}/reset-password?token={user.reset_token}",
+        "expires_in_minutes": 60,
+    }
 
 
 @router.post("/api/auth/reset")

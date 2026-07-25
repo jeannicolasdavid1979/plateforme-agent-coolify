@@ -157,6 +157,8 @@ Configurées dans Coolify → Application → Environment :
 | `STRIPE_SECRET_KEY` | Clé secrète Stripe — active le mode API automatique | `sk_live_...` |
 | `STRIPE_WEBHOOK_SECRET` | Secret de signature du webhook Stripe (vérifie les événements) | `whsec_...` |
 | `SMTP_HOST`·`SMTP_PORT`·`SMTP_USER`·`SMTP_PASSWORD`·`SMTP_FROM` | Envoi des e-mails (vérification, reset). Sans `SMTP_HOST` : liens journalisés | `smtp.example.com` |
+| `SMTP_SSL` | TLS implicite (SMTPS). Vide = déduit du port (465 → oui, sinon STARTTLS) | `true` |
+| `ADMIN_BOOTSTRAP_PASSWORD` | **Secours** : (ré)applique ce mot de passe aux comptes d'`ADMIN_EMAILS` à chaque démarrage. À retirer une fois la main reprise | `MonPasseSolide2026` |
 | `PUBLIC_BASE_URL` | Base des liens dans les e-mails (défaut : `site_url`) | `https://plateformehermes.kechlab.com` |
 | `DATABASE_URL` | Emplacement de la base (défaut : volume persistant) | `sqlite:////app/data/orchestrator.db` |
 | `LAB_MEDIA_DIR` | Dossier des médias importés en admin (défaut : `./data/media`, dans le volume) | `/app/data/media` |
@@ -183,6 +185,41 @@ Configurées dans Coolify → Application → Environment :
 4. Une fois admin, la section **« Réglages business »** apparaît (prix de
    déploiement, recharge par défaut, crédit offert, **frais de service**,
    **liste des montants de recharge**).
+
+#### Enfermé dehors : reprendre la main sans e-mail
+
+Le « mot de passe oublié » suppose un SMTP opérationnel. Sans lui, l'exploitant
+n'a aucun recours — d'où ce levier, qui passe par le seul canal toujours sous
+son contrôle : les variables d'environnement.
+
+1. Dans Coolify → l'application → *Environment*, ajoutez :
+   `ADMIN_BOOTSTRAP_PASSWORD=UnMotDePasseSolide` (8 caractères minimum), en
+   vérifiant qu'`ADMIN_EMAILS` contient bien votre adresse.
+2. Redéployez. Au démarrage, chaque adresse d'`ADMIN_EMAILS` reçoit ce mot de
+   passe : le compte est créé s'il n'existe pas, **sinon son mot de passe est
+   réinitialisé**. Le compte est admin et son adresse marquée vérifiée.
+   Les logs affichent `ACCÈS ADMIN … via ADMIN_BOOTSTRAP_PASSWORD`.
+3. Connectez-vous, puis **retirez la variable et redéployez** : tant qu'elle est
+   présente, le mot de passe est ré-appliqué à chaque démarrage.
+
+Pour dépanner un **client** dont l'e-mail ne part pas : admin → *E-mails* →
+« Générer un lien de réinitialisation », puis transmettez le lien (valable
+1 heure) de la main à la main.
+
+### E-mails qui ne partent pas
+
+L'admin dispose d'un panneau **« E-mails »** indiquant si un SMTP est configuré
+et sur quel mode de chiffrement, avec un bouton **« Envoyer un e-mail de test »**
+qui renvoie la cause exacte d'un échec (authentification, port, certificat).
+
+Piège le plus fréquent : le **port 465** exige un TLS implicite. Une connexion
+STARTTLS y reste muette jusqu'au délai d'attente — d'où des e-mails qui « ne
+partent pas » sans erreur visible. Le port est désormais détecté
+automatiquement (465 → TLS implicite), et `SMTP_SSL` permet de forcer le mode.
+
+Sans `SMTP_HOST`, rien n'est perdu : le contenu de chaque e-mail — **lien de
+vérification et de réinitialisation compris** — est écrit dans les journaux du
+conteneur (Coolify → l'application → *Logs*).
 
 ### Frais de service sur les recharges
 

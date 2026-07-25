@@ -29,6 +29,11 @@ app.add_middleware(
 @app.on_event("startup")
 def _startup():
     init_db()
+    # Levier de secours : rend l'accès admin quand l'e-mail de récupération
+    # n'est pas disponible (no-op si ADMIN_BOOTSTRAP_PASSWORD n'est pas défini).
+    from .bootstrap import apply_admin_bootstrap
+
+    apply_admin_bootstrap()
     _start_hosting_sweeper()
 
 

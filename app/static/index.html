@@ -499,8 +499,8 @@
           agent : <code>votre-choix.kechlab.com</code> — accessible partout, rien qu'à vous.</div>
       </div>
       <select id="tmodel">
-        <option value="openai/gpt-4o">GPT-4o (défaut)</option>
-        <option value="openai/gpt-4o-mini">GPT-4o mini</option>
+        <option value="openai/gpt-4o-mini">GPT-4o mini (défaut)</option>
+        <option value="openai/gpt-4o">GPT-4o</option>
         <option value="anthropic/claude-sonnet-4.5">Claude Sonnet 4.5</option>
         <option value="anthropic/claude-opus-4.6">Claude Opus 4.6</option>
         <option value="meta-llama/llama-3.3-70b-instruct:free">Llama 3.3 70B (gratuit)</option>
@@ -696,6 +696,21 @@
         <label>Grâce après échéance (jours)<input id="p-grace" type="number" min="0" step="1"></label>
         <label>Rétention avant suppression (jours)<input id="p-retention" type="number" min="0" step="1"></label>
       </div>
+    </div>
+
+    <!-- E-mails transactionnels : vérification d'adresse, mot de passe oublié -->
+    <div class="prod-card wide">
+      <div class="prod-head"><span class="prod-ico">✉️</span><h3>E-mails (vérification &amp; mot de passe oublié)</h3>
+        <span id="mail-state" class="pill"></span></div>
+      <p class="prod-sub" id="mail-advice"></p>
+      <div class="row" style="gap:8px;flex-wrap:wrap;margin-top:8px">
+        <button class="ghost" onclick="testEmail()">Envoyer un e-mail de test</button>
+        <input id="reset-email" type="email" placeholder="adresse d'un client" style="max-width:260px">
+        <button class="ghost" onclick="makeResetLink()">Générer un lien de réinitialisation</button>
+      </div>
+      <p class="prod-sub" style="margin-top:6px">Le lien de secours se transmet de la main à la
+        main : il dépanne un client sans attendre que l'envoi d'e-mails soit réparé.</p>
+      <p id="mail-msg" class="muted"></p>
     </div>
 
     <!-- Mises à jour des agents (Hermes WebUI & Agent) -->
@@ -1069,6 +1084,36 @@ async function loadSystem() {
       (db.advice ? `<br>${icon(db.level)}<b>Persistance</b> — ${db.advice}` +
                    (db.path ? ` <span class="muted">(${db.path})</span>` : '') : '');
   } catch (e) { /* non-admin */ }
+}
+
+// ── E-mails : état de la configuration, test, lien de secours ───────
+async function loadEmailState() {
+  if (!isAdmin || !$('mail-state')) return;
+  try {
+    const d = await api('/api/admin/email');
+    $('mail-state').textContent = d.configured
+      ? `✔ ${d.host}:${d.port} — ${d.mode}` : '⚠ SMTP non configuré';
+    $('mail-state').style.color = d.configured ? '' : 'var(--bad)';
+    $('mail-advice').textContent = d.advice;
+  } catch (e) { /* non-admin */ }
+}
+async function testEmail() {
+  const msg = $('mail-msg'); msg.textContent = 'Envoi en cours…';
+  try {
+    const r = await api('/api/admin/email/test', {method: 'POST'});
+    msg.textContent = (r.sent ? '✔ ' : '❌ ') + r.message;
+  } catch (e) { msg.textContent = '❌ ' + e.message; }
+}
+async function makeResetLink() {
+  const msg = $('mail-msg'), email = $('reset-email').value.trim();
+  if (!email) { msg.textContent = "Indiquez l'adresse du compte à dépanner."; return; }
+  msg.textContent = 'Génération…';
+  try {
+    const r = await api('/api/admin/reset-link', {method: 'POST', body: JSON.stringify({email})});
+    msg.innerHTML = `✔ Lien valable ${r.expires_in_minutes} min pour ${r.email} — ` +
+      `<code style="user-select:all">${r.link}</code> ` +
+      `<button class="ghost mini" onclick="copyText('${r.link}', this)">Copier</button>`;
+  } catch (e) { msg.textContent = '❌ ' + e.message; }
 }
 
 // ── OpenRouter : crédit du compte, alerte statut, top modèles ───────
@@ -1860,7 +1905,7 @@ function refresh() {
       $('who').textContent = email + (isAdmin ? ' · admin' : '');
       $('settings').classList.toggle('hidden', !isAdmin);
       $('verify-banner').classList.toggle('hidden', !!me.email_verified);
-      if (isAdmin) { renderCachedTenants(); loadStripe(); loadFleet(); loadPromos(); loadScenes(); loadOverview(); loadSystem(); loadSocial(); loadOpenRouter(); loadToolLinks(); }
+      if (isAdmin) { renderCachedTenants(); loadStripe(); loadFleet(); loadPromos(); loadScenes(); loadOverview(); loadSystem(); loadSocial(); loadOpenRouter(); loadToolLinks(); loadEmailState(); }
     }).catch(() => {});
     loadPricing().then(loadTenants);
     // Atterrissage sur « Commander » (et pas sur « Mon compte » restauré par

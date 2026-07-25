@@ -60,7 +60,7 @@ class Tenant(Base):
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
     name: Mapped[str] = mapped_column(String(128))
     subdomain: Mapped[str] = mapped_column(String(64), unique=True, index=True)
-    model: Mapped[str] = mapped_column(String(128), default="openai/gpt-4o")
+    model: Mapped[str] = mapped_column(String(128), default="openai/gpt-4o-mini")
     system_prompt: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(32), default="awaiting_payment")
     # "awaiting_payment" → "pending" → "deploying" → "running" | "failed"
