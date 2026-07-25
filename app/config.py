@@ -57,6 +57,12 @@ class Settings(BaseSettings):
     hosting_grace_days: int = 0             # jours de tolérance après l'échéance avant suspension
     hosting_retention_days: int = 30        # jours de rétention (restaurable) avant suppression définitive
 
+    # ── Mises à jour des agents (Hermes webui + agent) ────────────────
+    # Prix d'une mise à jour à la demande, et nombre de mises à jour
+    # offertes par mois et par client (remis à zéro le 1er du mois).
+    update_cost_eur: float = 1.99
+    free_updates_per_month: int = 3
+
     # Stripe — deux niveaux d'intégration :
     #  • STRIPE_SECRET_KEY (sk_live_…) : mode API COMPLET. Les sessions de
     #    paiement sont générées automatiquement avec les montants de l'admin

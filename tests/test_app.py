@@ -1519,3 +1519,148 @@ def test_lab_scenes_metadata():
     assert birth["refs"] == "A → B (10 s)"
     assert "quantum core" in birth["prompt"]
     assert birth["file"] == "lab-birth"
+
+
+def test_pricing_keys_all_have_a_default():
+    """Garde-fou : toute clé de tarification DOIT exister dans la config.
+
+    Une clé ajoutée à PRICING_KEYS sans défaut correspondant fait lever
+    get_pricing() — donc 500 sur la page d'accueil ET sur la création
+    d'agent (régression constatée en production)."""
+    from app.api import PRICING_KEYS
+    from app.config import get_settings
+
+    s = get_settings()
+    missing = [k for k in PRICING_KEYS if not hasattr(s, k)]
+    assert not missing, f"Clés sans valeur par défaut dans config.py : {missing}"
+
+
+def test_pricing_and_agent_creation_expose_update_settings():
+    """Le parcours client complet reste servi (pas de 500) et les réglages
+    de mise à jour sont pilotables comme le reste de la tarification."""
+    p = client.get("/api/pricing")
+    assert p.status_code == 200
+    assert p.json()["update_cost_eur"] == 1.99
+    assert p.json()["free_updates_per_month"] == 3
+
+    headers = _register("pricing-update@ex.io")
+    r = client.post("/api/agents", json={"name": "A", "subdomain": "a-upd"}, headers=headers)
+    assert r.status_code == 200, r.text
+
+    admin = _admin("update-pricing-admin@ex.io")
+    r = client.put("/api/admin/pricing", headers=admin,
+                   json={"update_cost_eur": 4.5, "free_updates_per_month": 1})
+    assert r.status_code == 200
+    assert client.get("/api/pricing").json()["update_cost_eur"] == 4.5
+
+
+def test_agent_updates_flow(monkeypatch):
+    """Vérification, quota offert, puis bascule payante — sans jamais dépendre
+    de GitHub (le relevé amont est simulé)."""
+    from app import agent_updates as au
+
+    monkeypatch.setattr(au, "fetch_latest_versions",
+                        lambda timeout=6.0: {"webui": "0.52.149", "agent": "07e97d2f"})
+
+    headers = _register("updates@ex.io")
+    aid = client.post("/api/agents", json={"name": "U", "subdomain": "u-upd"},
+                      headers=headers).json()["agent"]["id"]
+
+    # Premier relevé : l'agent n'a pas de version connue → référence posée,
+    # aucune mise à jour facturée pour un retard non mesurable.
+    r = client.get(f"/api/agents/{aid}/check-updates", headers=headers)
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["available"] == {"webui": "0.52.149", "agent": "07e97d2f"}
+    assert d["updates"] == []
+    assert d["pricing"]["free_updates_left"] == 3
+    assert client.post(f"/api/agents/{aid}/request-update", headers=headers).status_code == 409
+
+    # L'amont bouge : l'écart devient réel et la mise à jour est proposée.
+    monkeypatch.setattr(au, "fetch_latest_versions",
+                        lambda timeout=6.0: {"webui": "0.53.0", "agent": "07e97d2f"})
+    from app.db import SessionFactory
+    from app.models import Setting
+    with SessionFactory() as s:  # force un nouveau relevé
+        s.query(Setting).filter(Setting.key == au.LATEST_CHECKED_KEY).delete()
+        s.commit()
+
+    d = client.get(f"/api/agents/{aid}/check-updates", headers=headers).json()
+    assert [u["component"] for u in d["updates"]] == ["webui"]
+    assert d["updates"][0]["from"] == "0.52.149" and d["updates"][0]["to"] == "0.53.0"
+
+    # Quota offert : la mise à jour part sans paiement et la version est adoptée.
+    r = client.post(f"/api/agents/{aid}/request-update", headers=headers)
+    assert r.status_code == 200
+    assert r.json()["status"] == "free_credit_applied"
+    d = client.get(f"/api/agents/{aid}/check-updates", headers=headers).json()
+    assert d["current"]["webui"] == "0.53.0"
+    assert d["updates"] == []
+    assert d["pricing"]["free_updates_left"] == 2
+
+
+def test_agent_update_becomes_billable_when_quota_exhausted(monkeypatch):
+    """Quota épuisé → session de paiement, et le règlement applique la version."""
+    from app import agent_updates as au
+
+    monkeypatch.setattr(au, "fetch_latest_versions",
+                        lambda timeout=6.0: {"webui": "1.0.0", "agent": "aaaaaaa1"})
+
+    admin = _admin("quota-admin@ex.io")
+    client.put("/api/admin/pricing", headers=admin,
+               json={"update_cost_eur": 2.5, "free_updates_per_month": 0})
+
+    headers = _register("billable@ex.io")
+    aid = client.post("/api/agents", json={"name": "B", "subdomain": "b-upd"},
+                      headers=headers).json()["agent"]["id"]
+    client.get(f"/api/agents/{aid}/check-updates", headers=headers)  # pose la référence
+
+    # L'amont bouge
+    monkeypatch.setattr(au, "fetch_latest_versions",
+                        lambda timeout=6.0: {"webui": "1.1.0", "agent": "aaaaaaa1"})
+    from app.db import SessionFactory
+    from app.models import Setting, Tenant
+    with SessionFactory() as s:
+        s.query(Setting).filter(Setting.key == au.LATEST_CHECKED_KEY).delete()
+        s.commit()
+
+    d = client.get(f"/api/agents/{aid}/check-updates", headers=headers).json()
+    assert d["pricing"]["can_use_free"] is False and d["pricing"]["cost_eur"] == 2.5
+
+    r = client.post(f"/api/agents/{aid}/request-update", headers=headers)
+    assert r.status_code == 200 and r.json()["status"] == "checkout_created"
+    assert r.json()["amount_eur"] == 2.5
+
+    client.post(f"/api/pay/{r.json()['checkout_id']}")
+    with SessionFactory() as s:
+        assert s.get(Tenant, aid).hermes_webui_version == "1.1.0"
+
+
+def test_upstream_outage_never_breaks_the_check(monkeypatch):
+    """GitHub injoignable : on sert le dernier relevé connu, jamais une 500."""
+    from app import agent_updates as au
+
+    def _boom(timeout=6.0):
+        raise RuntimeError("github unreachable")
+
+    monkeypatch.setattr(au, "fetch_latest_versions", _boom)
+    headers = _register("outage@ex.io")
+    aid = client.post("/api/agents", json={"name": "O", "subdomain": "o-upd"},
+                      headers=headers).json()["agent"]["id"]
+    r = client.get(f"/api/agents/{aid}/check-updates", headers=headers)
+    assert r.status_code == 200
+    assert r.json()["updates"] == []
+
+
+def test_db_diagnostics_reports_persistence():
+    """L'admin voit où est la base et si elle survivra au redéploiement."""
+    from app.db import db_diagnostics
+
+    d = db_diagnostics()
+    assert set(("path", "users", "tenants", "persistent", "is_fallback")) <= set(d)
+
+    admin = _admin("dbdiag@ex.io")
+    sysinfo = client.get("/api/admin/system", headers=admin).json()
+    assert "database" in sysinfo
+    assert sysinfo["database"]["level"] in ("ok", "critical")
+    assert sysinfo["database"]["users"] >= 1

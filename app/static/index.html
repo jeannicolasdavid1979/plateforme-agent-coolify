@@ -1054,11 +1054,20 @@ async function loadSystem() {
   try {
     const d = await api('/api/admin/system');
     const tile = (n, l, cls) => `<div class="stat-tile ${cls}"><div class="n">${n}</div><div class="l">${l}</div></div>`;
+    const db = d.database || {};
     $('sys-tiles').innerHTML =
       tile(d.cpu.pct + ' %', `CPU (${d.cpu.cores} cœurs, charge ${d.cpu.load[1]})`, d.cpu.level) +
       tile(d.memory.used_pct + ' %', `RAM (${d.memory.total_gb} Go)`, d.memory.level) +
-      tile(d.disk.used_pct + ' %', `Disque (${d.disk.free_gb} Go libres)`, d.disk.level);
-    $('sys-advice').textContent = (d.advice_level === 'ok' ? '✅ ' : d.advice_level === 'warning' ? '⚠️ ' : '🚨 ') + d.advice;
+      tile(d.disk.used_pct + ' %', `Disque (${d.disk.free_gb} Go libres)`, d.disk.level) +
+      tile(`${db.users ?? '—'} / ${db.tenants ?? '—'}`,
+           db.level === 'ok' ? 'Comptes / agents en base (persistée)'
+                             : 'Comptes / agents — BASE NON PERSISTÉE',
+           db.level || 'ok');
+    const icon = (l) => l === 'ok' ? '✅ ' : l === 'warning' ? '⚠️ ' : '🚨 ';
+    $('sys-advice').innerHTML =
+      icon(d.advice_level) + d.advice +
+      (db.advice ? `<br>${icon(db.level)}<b>Persistance</b> — ${db.advice}` +
+                   (db.path ? ` <span class="muted">(${db.path})</span>` : '') : '');
   } catch (e) { /* non-admin */ }
 }
 

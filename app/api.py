@@ -563,12 +563,33 @@ def admin_system(admin: User = Depends(require_admin)):
     disk_pct = round(100 * du.used / du.total, 1)
 
     worst = max(cpu_pct, mem_pct, disk_pct)
+
+    # Persistance : le point de panne le plus coûteux (un redéploiement sans
+    # volume monté fait « disparaître » comptes et agents).
+    from .db import db_diagnostics
+    d = db_diagnostics()
+    if d["is_fallback"]:
+        db_level, db_advice = "critical", (
+            "Base de repli : les données seront perdues au prochain redéploiement. "
+            "Montez un volume (dossier) sur /app/data dans Coolify.")
+    elif d["persistent"] is False:
+        db_level, db_advice = "critical", (
+            "Aucun volume persistant détecté sur le dossier de données : comptes et "
+            "agents repartiront de zéro au prochain redéploiement. "
+            "Coolify → l'app → Persistent Storage → Volume → /app/data.")
+    else:
+        db_level, db_advice = "ok", "Base persistée sur volume."
+
     return {
         "cpu": {"cores": cores, "load": [round(load1, 2), round(load5, 2), round(load15, 2)],
                 "pct": cpu_pct, "level": level(cpu_pct)},
         "memory": {"total_gb": round(mem_total / 1e9, 1), "used_pct": mem_pct, "level": level(mem_pct)},
         "disk": {"total_gb": round(du.total / 1e9, 1), "free_gb": round(du.free / 1e9, 1),
                  "used_pct": disk_pct, "level": level(disk_pct)},
+        "database": {"path": d["path"], "size_bytes": d["size_bytes"],
+                     "modified_at": d["modified_at"], "users": d["users"],
+                     "tenants": d["tenants"], "persistent": d["persistent"],
+                     "is_fallback": d["is_fallback"], "level": db_level, "advice": db_advice},
         "advice": ("Envisagez un plan Hetzner supérieur (CPU/RAM/disque saturés)."
                    if worst >= 90 else
                    "Surveillez la charge — un upgrade Hetzner sera bientôt utile."
@@ -1192,28 +1213,31 @@ def check_updates(agent_id: str, user: User = Depends(current_user), db: Session
     if not tenant or tenant.user_id != user.id:
         raise HTTPException(404, "Agent introuvable")
 
-    # Utilise le cache (scraping fait en background ou manuellement par admin)
-    latest = agent_updates.get_cached_latest_versions(db)
+    # Versions amont : rafraîchies au plus une fois par heure, en direct depuis
+    # GitHub. En cas d'échec réseau on garde le dernier relevé connu (cache).
+    latest = agent_updates.refresh_latest_versions(db, max_age_s=3600)
     tenant.last_update_check_at = datetime.now(timezone.utc)
-    db.commit()
+    # Agent déployé avant le suivi de versions : on pose sa référence de
+    # départ au lieu de lui facturer un retard qu'on ne sait pas mesurer.
+    agent_updates.adopt_versions_if_unknown(tenant, latest)
 
-    # Voir ce qui est disponible
     updates_available = agent_updates.check_updates_available(tenant, latest)
-    update_cost = agent_updates.get_update_cost_eur(db)
-    can_free = agent_updates.has_free_updates_available(user)
+    quota = agent_updates.get_free_updates_quota(db)
+    left = agent_updates.free_updates_left(user, quota)
+    db.commit()
 
     return {
         "agent_id": agent_id,
         "current": {
-            "webui": tenant.hermes_webui_version or "unknown",
-            "agent": tenant.hermes_agent_version or "unknown",
+            "webui": tenant.hermes_webui_version or "inconnue",
+            "agent": tenant.hermes_agent_version or "inconnue",
         },
         "available": latest,
         "updates": updates_available,
         "pricing": {
-            "cost_eur": update_cost,
-            "free_updates_left": max(0, user.free_updates_monthly - user.free_updates_used),
-            "can_use_free": can_free,
+            "cost_eur": agent_updates.get_update_cost_eur(db),
+            "free_updates_left": left,
+            "can_use_free": left > 0,
         },
     }
 
@@ -1231,7 +1255,8 @@ def request_update(agent_id: str, user: User = Depends(current_user), db: Sessio
         raise HTTPException(409, "Aucune mise à jour disponible")
 
     update_cost = agent_updates.get_update_cost_eur(db)
-    can_free = agent_updates.has_free_updates_available(user)
+    quota = agent_updates.get_free_updates_quota(db)
+    can_free = agent_updates.has_free_updates_available(user, quota)
 
     # Avant de redéployer, met à jour les versions du tenant
     def _apply_updates_to_tenant(t: Tenant, upd_list: list[dict]) -> None:
@@ -1242,7 +1267,7 @@ def request_update(agent_id: str, user: User = Depends(current_user), db: Sessio
                 t.hermes_agent_version = upd["to"]
 
     if can_free:
-        agent_updates.consume_free_update(user)
+        agent_updates.consume_free_update(user, quota)
         _apply_updates_to_tenant(tenant, updates)
         tenant.last_update_at = datetime.now(timezone.utc)
         db.commit()
