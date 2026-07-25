@@ -2005,15 +2005,20 @@ async function checkAgentUpdates(agentId) {
   msgEl.textContent = '🔄 Vérification...';
   try {
     const r = await api(`/api/agents/${agentId}/check-updates`);
-    if (!r.updates || r.updates.length === 0) {
-      msgEl.textContent = '✅ Aucune mise à jour disponible';
+    const installed = r.detected ? r.current.webui : null;
+    const latest = (r.available && r.available.webui) || '?';
+    const act = `<button class="ghost mini" onclick="requestAgentUpdate('${agentId}')">⚡ Mettre à jour</button>`;
+    if (r.up_to_date) {
+      msgEl.textContent = `✅ À jour — version ${installed}`;
       return;
     }
-    const upd = r.updates.map(u => `${u.component} ${u.from} → ${u.to}`).join(', ');
-    const canFree = r.pricing.can_use_free;
-    const cost = canFree ? '(gratuit)' : `(${eur(r.pricing.cost_eur)} €)`;
-    const left = canFree ? `crédits : ${r.pricing.free_updates_left}` : 'payant';
-    msgEl.innerHTML = `📦 ${upd} ${cost} · ${left} <button class="ghost mini" onclick="requestAgentUpdate('${agentId}')">⚡ Mettre à jour</button>`;
+    if (!r.updates || r.updates.length === 0) {
+      // Version illisible : on le DIT, au lieu de laisser croire que tout va bien.
+      msgEl.innerHTML = `⚠️ Version non détectée sur l'agent — dernière publiée : ${latest} ${act}`;
+      return;
+    }
+    const upd = r.updates.map(u => `${u.label || u.component} ${u.from} → ${u.to}`).join(', ');
+    msgEl.innerHTML = `📦 ${upd} ${act}`;
   } catch (e) {
     msgEl.textContent = `❌ ${e.message}`;
   }
@@ -2024,8 +2029,10 @@ async function requestAgentUpdate(agentId) {
   msgEl.textContent = '⏳ Traitement...';
   try {
     const r = await api(`/api/agents/${agentId}/request-update`, {method:'POST'});
-    if (r.status === 'free_credit_applied') {
-      msgEl.innerHTML = `✅ Mise à jour lancée (crédit gratuit) — <a href="javascript:checkUpdateStatus('${agentId}')">voir l'état</a>`;
+    if (r.status === 'operator_update') {
+      msgEl.innerHTML = `✅ Mise à jour lancée (maintenance admin, non facturée) — <a href="javascript:checkUpdateStatus('${agentId}')">voir l'état</a>`;
+    } else if (r.status === 'free_credit_applied') {
+      msgEl.innerHTML = `✅ Mise à jour lancée (mise à jour offerte) — <a href="javascript:checkUpdateStatus('${agentId}')">voir l'état</a>`;
     } else if (r.status === 'checkout_created') {
       msgEl.innerHTML = `💳 Session paiement créée (${eur(r.amount_eur)} €) — <a href="/pay/${r.checkout_id}">payer et confirmer</a>`;
     }

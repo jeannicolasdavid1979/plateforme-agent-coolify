@@ -17,6 +17,13 @@ Les dates suivent l'ordre de développement.
   l'agent avec le mot de passe qu'elle détient et lit sa version.
 
 ### Corrigé
+- **« Agent introuvable » sur l'agent d'un client, depuis l'admin** : la
+  vérification de version n'acceptait que les agents du compte appelant.
+  L'exploitant voyait donc une croix rouge sur un agent parfaitement
+  fonctionnel, comme si la plateforme l'avait perdu. L'admin accède désormais
+  à toute la flotte — et sa mise à jour est de la **maintenance** : ni
+  facturée, ni prise sur le quota offert du client. Le cloisonnement entre
+  clients, lui, reste entier.
 - **Une mise à jour rejouait un déploiement complet** : `run_job` parcourait
   toujours les étapes de création au lieu de celles enregistrées dans le job —
   un agent mis à jour se serait vu attribuer un **second service Coolify**.

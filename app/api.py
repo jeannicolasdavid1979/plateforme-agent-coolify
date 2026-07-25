@@ -1252,12 +1252,23 @@ def _resume_if_suspended(db: Session, tenant: Tenant) -> None:
 # ── Agent Updates ────────────────────────────────────────────────────
 
 
+def _tenant_for_update(db: Session, agent_id: str, user: User) -> Tenant:
+    """L'agent visé, si l'appelant a le droit d'y toucher.
+
+    Son propriétaire, évidemment — mais AUSSI l'administrateur, qui exploite
+    la flotte entière : sans cela, la vérification lancée depuis l'admin
+    répondait « Agent introuvable » sur l'agent d'un client, en donnant à
+    croire que la plateforme l'avait perdu."""
+    tenant = db.get(Tenant, agent_id)
+    if not tenant or (tenant.user_id != user.id and not user.is_admin):
+        raise HTTPException(404, "Agent introuvable")
+    return tenant
+
+
 @router.get("/api/agents/{agent_id}/check-updates")
 def check_updates(agent_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
     """Vérifie si des mises à jour sont disponibles pour un agent."""
-    tenant = db.get(Tenant, agent_id)
-    if not tenant or tenant.user_id != user.id:
-        raise HTTPException(404, "Agent introuvable")
+    tenant = _tenant_for_update(db, agent_id, user)
 
     # Versions amont : rafraîchies au plus une fois par heure, en direct depuis
     # GitHub. En cas d'échec réseau on garde le dernier relevé connu (cache).
@@ -1295,9 +1306,7 @@ def check_updates(agent_id: str, user: User = Depends(current_user), db: Session
 @router.post("/api/agents/{agent_id}/request-update")
 def request_update(agent_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
     """Demande une mise à jour : crée Checkout (payant) ou débite crédit (gratuit)."""
-    tenant = db.get(Tenant, agent_id)
-    if not tenant or tenant.user_id != user.id:
-        raise HTTPException(404, "Agent introuvable")
+    tenant = _tenant_for_update(db, agent_id, user)
 
     if tenant.status != "running":
         raise HTTPException(409, "Votre agent doit être en ligne pour être mis à jour")
@@ -1315,8 +1324,14 @@ def request_update(agent_id: str, user: User = Depends(current_user), db: Sessio
     update_cost = agent_updates.get_update_cost_eur(db)
     quota = agent_updates.get_free_updates_quota(db)
 
-    if agent_updates.has_free_updates_available(user, quota):
-        agent_updates.consume_free_update(user, quota)
+    # L'administrateur intervenant sur l'agent d'un CLIENT fait de la
+    # maintenance : ni son quota offert entamé, ni facture — et surtout pas
+    # le quota du client, qui n'a rien demandé.
+    as_operator = user.is_admin and tenant.user_id != user.id
+
+    if as_operator or agent_updates.has_free_updates_available(user, quota):
+        if not as_operator:
+            agent_updates.consume_free_update(user, quota)
         tenant.last_update_at = datetime.now(timezone.utc)
         db.commit()
         # Les versions ne sont PAS présumées : elles seront relues sur l'agent
@@ -1326,7 +1341,7 @@ def request_update(agent_id: str, user: User = Depends(current_user), db: Sessio
         db.commit()
         engine.run_job_async(job.id)
         return {
-            "status": "free_credit_applied",
+            "status": "operator_update" if as_operator else "free_credit_applied",
             "job_id": job.id,
             "updates": updates,
             "free_updates_left": agent_updates.free_updates_left(user, quota),
@@ -1354,9 +1369,7 @@ def request_update(agent_id: str, user: User = Depends(current_user), db: Sessio
 @router.get("/api/agents/{agent_id}/update-status")
 def update_status(agent_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
     """Récupère le statut d'une mise à jour en cours."""
-    tenant = db.get(Tenant, agent_id)
-    if not tenant or tenant.user_id != user.id:
-        raise HTTPException(404, "Agent introuvable")
+    tenant = _tenant_for_update(db, agent_id, user)
 
     # Cherche le dernier job de type "update"
     jobs = [j for j in tenant.jobs if j.status not in ["success", "failed"]]

@@ -1887,3 +1887,55 @@ def test_pause_is_per_channel():
     # Réservé à l'admin
     assert client.put("/api/admin/stripe", headers=_register("pause-intrus@ex.io"),
                       json={"paused": []}).status_code == 403
+
+
+def test_admin_can_check_and_update_a_client_agent(monkeypatch):
+    """L'admin exploite la flotte entière : la vérification lancée depuis
+    l'admin sur l'agent d'un CLIENT répondait « Agent introuvable », donnant
+    à croire que la plateforme avait perdu l'agent."""
+    from app import agent_probe, agent_updates as au
+
+    monkeypatch.setattr(au, "fetch_latest_versions",
+                        lambda timeout=6.0: {"webui": "0.52.149", "agent": "07e97d2f"})
+    monkeypatch.setattr(agent_probe, "detect_versions",
+                        lambda url, pw, timeout=8.0: {"webui": "0.51.92", "agent": "07e97d2f"})
+
+    client_headers, aid = _updatable_agent("owner@ex.io", "owned-agent")
+    admin = _admin("fleet-admin@ex.io")
+
+    r = client.get(f"/api/agents/{aid}/check-updates", headers=admin)
+    assert r.status_code == 200, r.text
+    assert r.json()["current"]["webui"] == "0.51.92"
+    assert [u["component"] for u in r.json()["updates"]] == ["webui"]
+    assert client.get(f"/api/agents/{aid}/update-status", headers=admin).status_code == 200
+
+    # Maintenance : ni facturée, ni prise sur le quota offert du client
+    from app.db import SessionFactory
+    from sqlalchemy import select as _select
+    from app.models import User as _User
+
+    r = client.post(f"/api/agents/{aid}/request-update", headers=admin)
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "operator_update"
+    with SessionFactory() as s:
+        owner = s.scalar(_select(_User).where(_User.email == "owner@ex.io"))
+        assert owner.free_updates_used == 0
+        admin_user = s.scalar(_select(_User).where(_User.email == "fleet-admin@ex.io"))
+        assert admin_user.free_updates_used == 0
+
+    # Le quota du propriétaire reste entier de son côté
+    d = client.get(f"/api/agents/{aid}/check-updates", headers=client_headers).json()
+    assert d["pricing"]["free_updates_left"] == 3
+
+
+def test_a_client_still_cannot_touch_another_agent(monkeypatch):
+    """Le cloisonnement entre clients reste entier."""
+    from app import agent_probe
+
+    monkeypatch.setattr(agent_probe, "detect_versions", lambda url, pw, timeout=8.0: {})
+    _headers, aid = _updatable_agent("mine@ex.io", "mine-agent")
+    intruder = _register("intrus-upd@ex.io")
+
+    assert client.get(f"/api/agents/{aid}/check-updates", headers=intruder).status_code == 404
+    assert client.post(f"/api/agents/{aid}/request-update", headers=intruder).status_code == 404
+    assert client.get(f"/api/agents/{aid}/update-status", headers=intruder).status_code == 404
