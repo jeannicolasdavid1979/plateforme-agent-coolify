@@ -2208,3 +2208,44 @@ def test_versions_from_compose_ignores_floating_tags():
                 "  hermes-agent:\n    image: nousresearch/hermes-agent\n")
     assert versions_from_compose(floating) == {"webui": None, "agent": None}
     assert versions_from_compose(None) == {"webui": None, "agent": None}
+
+
+def test_gateway_is_configured_at_creation(monkeypatch):
+    """Sans gateway, les tâches planifiées du client ne se déclenchent JAMAIS
+    (l'interface ne bat pas la seconde elle-même) — et rien ne le signale."""
+    from app import provisioning
+    from app.db import SessionFactory
+    from app.models import Tenant
+
+    pushed = {}
+
+    class _Env(_FakeCoolify):
+        def set_env(self, uuid, key, value):
+            pushed[key] = value
+
+    monkeypatch.setattr(provisioning, "get_client", lambda: _Env())
+    _headers, aid = _updatable_agent("gw@ex.io", "gw-agent")
+    with SessionFactory() as s:
+        tenant = s.get(Tenant, aid)
+        tenant.coolify_service_uuid = "svc-gw"
+        s.commit()
+        provisioning.ProvisioningEngine(s)._step_configure_env(tenant, None)
+
+    assert pushed["HERMES_API_URL"] == "http://hermes-agent:8642"
+    assert pushed["HERMES_WEBUI_GATEWAY_BASE_URL"] == "http://hermes-agent:8642"
+
+
+def test_agent_exposes_its_last_update_for_the_waiting_screen():
+    """Le client doit pouvoir patienter : sans cette date, « Ouvrir mon agent »
+    tombe sur une erreur serveur pendant le redémarrage."""
+    from datetime import datetime, timezone
+    from app.db import SessionFactory
+    from app.models import Tenant
+
+    headers, aid = _updatable_agent("hold@ex.io", "hold-agent")
+    with SessionFactory() as s:
+        s.get(Tenant, aid).last_update_at = datetime.now(timezone.utc)
+        s.commit()
+
+    agent = client.get("/api/agents", headers=headers).json()["agents"][0]
+    assert agent["last_update_at"]

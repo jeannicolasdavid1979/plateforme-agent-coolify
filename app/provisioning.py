@@ -364,12 +364,39 @@ class ProvisioningEngine:
         if tenant.system_prompt:
             client.set_env(svc_uuid, "HERMES_SYSTEM_PROMPT", tenant.system_prompt)
 
+        # Gateway : sans lui, les tâches planifiées de l'agent ne se
+        # déclenchent JAMAIS — l'interface ne fait pas tourner l'horloge
+        # elle-même, c'est le démon du conteneur moteur qui bat la seconde
+        # (toutes les 60 s). Le client verrait « Gateway not configured » et
+        # ses tâches resteraient inertes, sans message d'erreur. Le démon est
+        # déjà là : il ne manquait que l'adresse pour l'atteindre, sur le
+        # réseau interne du compose.
+        agent_host = self._agent_service_name(client, svc_uuid)
+        gateway_url = f"http://{agent_host}:8642"
+        client.set_env(svc_uuid, "HERMES_API_URL", gateway_url)
+        client.set_env(svc_uuid, "HERMES_WEBUI_GATEWAY_BASE_URL", gateway_url)
+
         # Variables magiques Coolify : c'est ELLES que le parseur de compose
         # lit pour générer les labels Traefik. Sans ça, Coolify garde le
         # domaine sslip.io généré à la création du service.
         client.set_env(svc_uuid, "SERVICE_FQDN_HERMESWEBUI", fqdn_host)
         client.set_env(svc_uuid, "SERVICE_URL_HERMESWEBUI", f"https://{fqdn_host}")
-        return "variables + domaine poussés"
+        return f"variables, domaine et gateway ({gateway_url}) poussés"
+
+    @staticmethod
+    def _agent_service_name(client, svc_uuid: str) -> str:
+        """Nom du service moteur dans le compose — c'est lui qui fait office
+        d'hôte sur le réseau interne. Repli sur le nom du template."""
+        try:
+            doc = yaml.safe_load(client.get_compose_raw(svc_uuid) or "") or {}
+            for name, svc in (doc.get("services") or {}).items():
+                if "hermes-agent" in str(name) or "hermes-agent" in str(
+                    (svc or {}).get("image", "")
+                ):
+                    return str(name)
+        except Exception:
+            pass
+        return "hermes-agent"
 
     def _step_set_fqdn(self, tenant: Tenant, job: ProvisioningJob) -> str:
         client = get_client()

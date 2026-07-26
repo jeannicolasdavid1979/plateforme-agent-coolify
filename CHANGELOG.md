@@ -18,6 +18,19 @@ Les dates suivent l'ordre de développement.
   inutile — la version est publique — et néfaste, la rafale d'essais
   emplissant le journal du client de connexions refusées.
 
+### Ajouté (suite)
+- **Sas d'attente pendant la mise à jour** : l'agent redémarre et son adresse
+  met un moment à répondre. Le client voit désormais un chronomètre et les
+  étapes en cours, et le bouton « Ouvrir mon agent » n'apparaît qu'une fois le
+  redémarrage terminé — auparavant il tombait sur une erreur du serveur, ce
+  qui donnait à croire que la mise à jour avait échoué.
+- **Gateway configuré dès la création** : sans lui, les tâches planifiées ne se
+  déclenchent jamais (l'interface ne bat pas la seconde elle-même, c'est le
+  démon du conteneur moteur qui le fait toutes les 60 s) et rien ne le signale
+  au client. Le démon était déjà là : il manquait l'adresse pour l'atteindre
+  (`HERMES_API_URL` / `HERMES_WEBUI_GATEWAY_BASE_URL` vers le moteur, port
+  8642, sur le réseau interne).
+
 ### Corrigé
 - **« Agent introuvable » sur l'agent d'un client, depuis l'admin** : la
   vérification de version n'acceptait que les agents du compte appelant.

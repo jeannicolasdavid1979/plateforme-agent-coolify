@@ -1518,7 +1518,36 @@ let firstLoad = true;
 const isFinalized = (id) => localStorage.getItem('hermes_finalized_' + id) === '1';
 const markFinalized = (id) => localStorage.setItem('hermes_finalized_' + id, '1');
 
+// Après une mise à jour, l'agent redémarre : ses conteneurs sont recréés et
+// son adresse met une minute à répondre. Sans ce sas, « Ouvrir mon agent »
+// tombait sur une page d'erreur du serveur — le client croyait sa mise à jour
+// ratée alors qu'elle était simplement en cours.
+const UPDATE_STEPS_UX = [
+  'Récupération de la nouvelle version',
+  'Redémarrage de votre agent',
+  'Remise en service sécurisée',
+  'Agent à jour',
+];
+
+const UPDATE_HOLD_MS = 150000;  // tirage d'images + recréation des conteneurs
+
+function updateHold(a) {
+  if (a.status !== 'running' || !a.last_update_at) return null;
+  const elapsed = Date.now() - Date.parse(a.last_update_at);
+  if (!(elapsed >= 0) || elapsed >= UPDATE_HOLD_MS) return null;
+  return {
+    pct: Math.min(100, elapsed / UPDATE_HOLD_MS * 100),
+    done: Math.min(UPDATE_STEPS_UX.length, Math.floor(elapsed / UPDATE_HOLD_MS * UPDATE_STEPS_UX.length)),
+    left: Math.ceil((UPDATE_HOLD_MS - elapsed) / 1000),
+    steps: UPDATE_STEPS_UX,
+    updating: true,
+  };
+}
+
 function finalizeState(a) {
+  // La sortie de mise à jour prime : elle traduit un redémarrage en cours.
+  const held = updateHold(a);
+  if (held) return held;
   if (a.status !== 'running' || isFinalized(a.id)) return null;
   if (!(a.id in finalizeStarts)) finalizeStarts[a.id] = Date.now();
   const elapsed = Date.now() - finalizeStarts[a.id];
@@ -1527,6 +1556,7 @@ function finalizeState(a) {
     pct: Math.min(100, elapsed / FINALIZE_MS * 100),
     done: Math.min(FINALIZE_STEPS.length, Math.floor(elapsed / FINALIZE_MS * FINALIZE_STEPS.length)),
     left: Math.ceil((FINALIZE_MS - elapsed) / 1000),
+    steps: FINALIZE_STEPS,
   };
 }
 
@@ -1629,13 +1659,18 @@ function renderTenantCard(a, job, fz) {
     body = `
       <div class="finalize">
         <div class="row" style="justify-content:space-between">
-          <span class="label">Finalisation — certificat SSL &amp; routage</span>
+          <span class="label">${fz.updating
+            ? '⏳ Mise à jour en cours — votre agent redémarre'
+            : 'Finalisation — certificat SSL &amp; routage'}</span>
           <span class="chrono">${mm}:${ss}</span>
         </div>
         <div class="bar"><div class="fill" style="width:${fz.pct}%"></div></div>
         <ul class="finalize-steps">
-          ${FINALIZE_STEPS.map((s, i) => `<li class="${i < fz.done ? 'done' : 'pending'}">${s}</li>`).join('')}
+          ${(fz.steps || FINALIZE_STEPS).map((s, i) => `<li class="${i < fz.done ? 'done' : 'pending'}">${s}</li>`).join('')}
         </ul>
+        ${fz.updating ? `<p class="muted" style="margin-top:8px">Patientez avant d'ouvrir
+          votre agent : son adresse répondra de nouveau dans quelques instants.
+          Vos conversations sont conservées.</p>` : ''}
       </div>`;
   } else if (a.status === 'running' && a.hosting && a.hosting.suspended) {
     // Suspendu (hébergement impayé) : aucune action « active » possible —

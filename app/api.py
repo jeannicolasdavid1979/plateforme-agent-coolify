@@ -1994,6 +1994,9 @@ def _agent_dict(a: Tenant, include_secrets: bool = False,
         "url": a.instance_url,
         "balance_eur": a.balance_eur or 0.0,
         "created_at": a.created_at.isoformat() if a.created_at else None,
+        # Sert au client à patienter : après une mise à jour, l'agent
+        # redémarre et son adresse met une minute à répondre de nouveau.
+        "last_update_at": a.last_update_at.isoformat() if a.last_update_at else None,
     }
     grace, retention = hosting_cfg or (0, 30)
     st = hosting_status(a.hosting_paid_until, a.suspended_at, grace, retention)
