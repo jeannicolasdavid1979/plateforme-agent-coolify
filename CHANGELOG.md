@@ -24,12 +24,17 @@ Les dates suivent l'ordre de développement.
   étapes en cours, et le bouton « Ouvrir mon agent » n'apparaît qu'une fois le
   redémarrage terminé — auparavant il tombait sur une erreur du serveur, ce
   qui donnait à croire que la mise à jour avait échoué.
-- **Gateway configuré dès la création** : sans lui, les tâches planifiées ne se
-  déclenchent jamais (l'interface ne bat pas la seconde elle-même, c'est le
-  démon du conteneur moteur qui le fait toutes les 60 s) et rien ne le signale
-  au client. Le démon était déjà là : il manquait l'adresse pour l'atteindre
-  (`HERMES_API_URL` / `HERMES_WEBUI_GATEWAY_BASE_URL` vers le moteur, port
-  8642, sur le réseau interne).
+- **Gateway démarré et configuré dès la création.** Sans lui, les tâches
+  planifiées ne se déclenchent jamais — l'interface ne bat pas la seconde
+  elle-même, c'est le démon du moteur qui le fait toutes les 60 s — et le
+  client n'a qu'une pastille pour l'en avertir. Deux manques :
+  le conteneur moteur ne lançait **pas** le démon (l'image démarre ses
+  services par défaut ; il faut lui passer `gateway run`, sans quoi rien
+  n'écoute sur 8642), et l'interface n'avait pas son adresse. Les deux sont
+  désormais posés, l'adresse utilisant le nom de conteneur Coolify
+  (`{service}-{uuid}`), seul nom que le DNS de Docker résout à coup sûr.
+  **La mise à jour remet cette configuration d'aplomb** : les agents déployés
+  avant ce correctif la récupèrent sans redéploiement.
 
 ### Corrigé
 - **« Agent introuvable » sur l'agent d'un client, depuis l'admin** : la

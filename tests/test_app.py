@@ -2078,6 +2078,9 @@ def test_update_pulls_the_latest_images_of_both_containers(monkeypatch):
     assert written, "le compose doit être réécrit, sinon rien ne change"
     assert "hermes-webui:0.52.149" in written[0], written[0]
     assert "sha256:" not in written[0], "le digest du moteur doit être levé"
+    # La mise à jour remet aussi la configuration d'aplomb : un agent déployé
+    # avant le gateway le récupère ici.
+    assert "gateway run" in written[0], "le gateway doit être posé au passage"
 
 
 def test_update_fails_loudly_when_images_cannot_be_pulled(monkeypatch):
@@ -2231,8 +2234,23 @@ def test_gateway_is_configured_at_creation(monkeypatch):
         s.commit()
         provisioning.ProvisioningEngine(s)._step_configure_env(tenant, None)
 
-    assert pushed["HERMES_API_URL"] == "http://hermes-agent:8642"
-    assert pushed["HERMES_WEBUI_GATEWAY_BASE_URL"] == "http://hermes-agent:8642"
+    # Coolify nomme les conteneurs « {service}-{uuid} » : c'est ce nom que le
+    # DNS de Docker résout. Le nom de service nu ne suffit pas toujours.
+    expected = "http://hermes-agent-svc-gw:8642"
+    assert pushed["HERMES_API_URL"] == expected
+    assert pushed["HERMES_WEBUI_GATEWAY_BASE_URL"] == expected
+    assert pushed["GATEWAY_HEALTH_URL"] == expected + "/health"
+
+
+def test_agent_container_runs_the_gateway():
+    """Sans `gateway run`, rien n'écoute sur 8642 : l'interface affiche
+    « Gateway endpoint not reachable » et les tâches planifiées dorment."""
+    from app.provisioning import customize_compose
+
+    compose = ("services:\n  hermes-agent:\n    image: nousresearch/hermes-agent\n"
+               "    environment:\n      - SERVICE_FQDN_HERMESWEBUI=x\n")
+    patched, _ = customize_compose(compose, "https://a.example.test")
+    assert "gateway run" in patched, patched
 
 
 def test_agent_exposes_its_last_update_for_the_waiting_screen():

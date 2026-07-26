@@ -47,7 +47,13 @@ _AGENT_BOOTSTRAP = (
     "  provider: \"auto\"\\n"
     "  base_url: \"https://openrouter.ai/api/v1\"\\n' "
     '"$${HERMES_MODEL:-openai/gpt-4o}" > /home/hermes/.hermes/config.yaml; '
-    "exec /init"
+    # …puis on lance le GATEWAY. Sans cet argument, l'image démarre ses
+    # services par défaut (interface + tableau de bord) mais RIEN n'écoute sur
+    # 8642 : les tâches planifiées du client ne se déclenchent alors jamais,
+    # et l'interface affiche « Gateway endpoint not reachable ».
+    # `gateway run` est la commande documentée pour ce conteneur ; /init (s6)
+    # la reçoit comme programme principal, après sa phase d'initialisation.
+    "exec /init gateway run"
 )
 
 _FQDN_KEY_RE = re.compile(r"^SERVICE_(?:FQDN|URL)_HERMESWEBUI(?:_\d+)?$")
@@ -371,10 +377,16 @@ class ProvisioningEngine:
         # ses tâches resteraient inertes, sans message d'erreur. Le démon est
         # déjà là : il ne manquait que l'adresse pour l'atteindre, sur le
         # réseau interne du compose.
-        agent_host = self._agent_service_name(client, svc_uuid)
+        # Coolify nomme les conteneurs « {service}-{uuid} » : c'est ce nom-là
+        # que le DNS de Docker résout à coup sûr sur le réseau du projet.
+        agent_host = f"{self._agent_service_name(client, svc_uuid)}-{svc_uuid}"
         gateway_url = f"http://{agent_host}:8642"
         client.set_env(svc_uuid, "HERMES_API_URL", gateway_url)
         client.set_env(svc_uuid, "HERMES_WEBUI_GATEWAY_BASE_URL", gateway_url)
+        # L'interface cite aussi ces deux variables dans son message d'erreur :
+        # on les pose pour ne dépendre d'aucune de ses versions.
+        client.set_env(svc_uuid, "GATEWAY_HEALTH_URL", f"{gateway_url}/health")
+        client.set_env(svc_uuid, "HERMES_GATEWAY_HEALTH_URL", f"{gateway_url}/health")
 
         # Variables magiques Coolify : c'est ELLES que le parseur de compose
         # lit pour générer les labels Traefik. Sans ça, Coolify garde le
@@ -552,12 +564,23 @@ class ProvisioningEngine:
         compose = client.get_compose_raw(svc_uuid)
         if compose:
             patched, changes = retag_compose(compose, latest.get("webui"))
+            # La mise à jour remet aussi la configuration d'aplomb : un agent
+            # déployé avant que le gateway soit posé le récupère ici, sans quoi
+            # ses tâches planifiées resteraient inertes à jamais.
+            fixed, fixes = customize_compose(patched or compose, tenant.instance_url or "")
+            if fixed:
+                patched, changes = fixed, changes + fixes
             if patched and client.update_compose_raw(svc_uuid, patched):
                 details.extend(changes)
             elif patched:
                 raise RuntimeError(
                     "votre hébergeur a refusé de changer de version"
                 )
+        # Les variables d'environnement suivent le même chemin (gateway).
+        try:
+            self._step_configure_env(tenant, job)
+        except Exception as exc:
+            logger.warning("Variables non repoussées pour %s : %s", tenant.subdomain, exc)
 
         # 2. Tirer les images ainsi désignées : Coolify exécute alors un
         #    `docker compose pull` — donc les DEUX conteneurs, le moteur de
