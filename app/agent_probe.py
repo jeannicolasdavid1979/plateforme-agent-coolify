@@ -1,126 +1,101 @@
 """Lire la version réellement installée sur un agent déployé.
 
-Le template Coolify tire les images sur des tags FLOTTANTS
-(`nousresearch/hermes-agent`, `ghcr.io/nesquena/hermes-webui:latest`) : le tag
-ne dit donc pas quelle version tourne, et deux agents déployés le même jour
-peuvent porter des versions différentes selon ce que l'hôte avait en cache.
+Deux sources, aucune n'exigeant d'authentification :
 
-La seule source fiable est l'agent lui-même : son interface expose sa version
-derrière une authentification par mot de passe — que la plateforme possède
-(`Tenant.instance_password`). On ouvre donc une session comme le ferait le
-client, et on lit `/api/version`.
+1. **Le compose du service Coolify** — les images y sont ÉPINGLÉES par le
+   template (`ghcr.io/nesquena/hermes-webui:0.51.92`, l'agent par digest).
+   C'est la source qui fait foi : c'est littéralement ce que l'hôte lance.
+2. **La page de connexion de l'agent** — elle référence ses fichiers statiques
+   avec la version en paramètre (`/static/login.js?v=v0.51.92`). Utile pour
+   confirmer ce qui tourne vraiment, l'agent étant seul juge.
 
-Prudence assumée : les points d'entrée d'un logiciel tiers peuvent changer.
-Toute la sonde est tolérante — un échec rend « version inconnue », jamais une
-erreur. L'interface le dit alors franchement plutôt que d'affirmer à tort
-qu'un agent est à jour.
+Une version antérieure de ce module tentait d'ouvrir une session sur l'agent
+pour interroger son API. C'était à la fois inutile (la version est publique)
+et néfaste : les essais de mots de passe emplissaient le journal du client
+d'une rafale de connexions refusées, impossible à distinguer d'une attaque.
 """
 from __future__ import annotations
 
 import logging
 import re
-from typing import Any
 
 import httpx
+import yaml
 
 logger = logging.getLogger("agent_probe")
 
-# Points d'entrée essayés dans l'ordre, avec plusieurs formes de connexion :
-# on ne contrôle pas ce logiciel, on ne suppose donc pas une seule variante.
-VERSION_PATHS = ("/api/version", "/api/system", "/api/system/info")
-LOGIN_PATHS = ("/login", "/api/login", "/api/auth/login")
-PASSWORD_FIELDS = ("password", "pass", "access_password")
+# `/static/login.js?v=v0.51.92` sur la page de connexion, sans authentification.
+_ASSET_VERSION_RE = re.compile(r"[?&]v=v?(\d+\.\d+\.\d+[\w.-]*)")
 
-_VERSION_RE = re.compile(r"\bv?(\d+\.\d+\.\d+(?:[-.\w]*)?)\b")
-_SHA_RE = re.compile(r"\b([0-9a-f]{7,40})\b")
+WEBUI_IMAGE_HINT = "hermes-webui"
+AGENT_IMAGE_HINT = "hermes-agent"
 
 
-def _extract(payload: Any, keys: tuple[str, ...]) -> str | None:
-    """Cherche une valeur de version dans un JSON de forme inconnue."""
-    if isinstance(payload, dict):
-        for key, value in payload.items():
-            k = str(key).lower()
-            if any(want in k for want in keys) and isinstance(value, (str, int, float)):
-                text = str(value).strip()
-                if text and text.lower() not in ("unknown", "none", "not detected"):
-                    return text.lstrip("v")
-        for value in payload.values():  # descente récursive
-            found = _extract(value, keys)
-            if found:
-                return found
-    elif isinstance(payload, list):
-        for item in payload:
-            found = _extract(item, keys)
-            if found:
-                return found
-    return None
-
-
-def _parse_versions(payload: Any) -> dict[str, str | None]:
-    """Extrait (webui, agent) d'une réponse quelconque."""
-    webui = _extract(payload, ("webui", "web_ui", "ui_version"))
-    agent = _extract(payload, ("agent", "core", "engine"))
-    if webui is None:
-        # Réponse plate du type {"version": "0.51.92"} : c'est l'interface.
-        webui = _extract(payload, ("version",))
-    for name, value in (("webui", webui), ("agent", agent)):
-        if value and not (_VERSION_RE.fullmatch(value) or _SHA_RE.fullmatch(value)):
-            # Valeur inexploitable (texte libre) — on préfère « inconnue ».
-            if name == "webui":
-                webui = None
-            else:
-                agent = None
-    return {"webui": webui, "agent": agent}
-
-
-def detect_versions(base_url: str, password: str | None, timeout: float = 8.0) -> dict[str, str | None]:
-    """Versions installées sur cet agent, ou {} si elles restent indéterminées."""
+def version_from_login_page(base_url: str, timeout: float = 8.0) -> str | None:
+    """Version de l'interface, lue sur sa page de connexion. None si muette."""
     if not base_url:
-        return {}
-    base = base_url.rstrip("/")
+        return None
     try:
         with httpx.Client(timeout=timeout, follow_redirects=True) as client:
-            # Certaines instances laissent la version en accès libre.
-            found = _read_version(client, base)
-            if found:
-                return found
-            if not password:
-                return {}
-            if not _login(client, base, password):
-                return {}
-            return _read_version(client, base) or {}
-    except Exception as exc:  # réseau, TLS, agent éteint…
-        logger.info("Version de %s non lisible : %s", base_url, exc)
-        return {}
-
-
-def _login(client: httpx.Client, base: str, password: str) -> bool:
-    """Ouvre une session sur l'interface de l'agent."""
-    for path in LOGIN_PATHS:
-        for field in PASSWORD_FIELDS:
-            for send in ("data", "json"):
-                try:
-                    resp = client.post(f"{base}{path}", **{send: {field: password}})
-                except Exception:
-                    continue
-                if resp.status_code < 400 and "login" not in str(resp.url):
-                    return True
-    return False
-
-
-def _read_version(client: httpx.Client, base: str) -> dict[str, str | None] | None:
-    for path in VERSION_PATHS:
-        try:
-            resp = client.get(f"{base}{path}")
-        except Exception:
-            continue
+            resp = client.get(f"{base_url.rstrip('/')}/login")
         if resp.status_code != 200:
+            return None
+        found = _ASSET_VERSION_RE.search(resp.text)
+        return found.group(1) if found else None
+    except Exception as exc:  # agent éteint, DNS, TLS…
+        logger.info("Page de connexion de %s illisible : %s", base_url, exc)
+        return None
+
+
+def _image_of(compose_yaml: str, hint: str) -> str | None:
+    try:
+        services = yaml.safe_load(compose_yaml)["services"]
+        assert isinstance(services, dict)
+    except Exception:
+        return None
+    for name, svc in services.items():
+        if not isinstance(svc, dict):
             continue
-        try:
-            payload = resp.json()
-        except ValueError:
-            continue
-        versions = _parse_versions(payload)
-        if versions.get("webui") or versions.get("agent"):
-            return versions
+        image = str(svc.get("image", ""))
+        if hint in image or hint in str(name):
+            return image or None
     return None
+
+
+def _tag_of(image: str | None) -> str | None:
+    """Version portée par une référence d'image.
+
+    `…/hermes-webui:0.51.92` → « 0.51.92 » ; `…@sha256:2f1f…` → « sha256:2f1f… »
+    abrégé, qui n'est pas un numéro de version mais identifie l'image sans
+    ambiguïté ; `…:latest` → None, un tag flottant ne dit rien de ce qui tourne.
+    """
+    if not image:
+        return None
+    if "@sha256:" in image:
+        return "sha256:" + image.split("@sha256:", 1)[1][:12]
+    ref = image.rsplit("/", 1)[-1]
+    if ":" not in ref:
+        return None
+    tag = ref.rsplit(":", 1)[1]
+    return None if tag in ("latest", "main", "edge") else tag
+
+
+def versions_from_compose(compose_yaml: str | None) -> dict[str, str | None]:
+    """Versions épinglées dans le compose — ce que l'hôte lance réellement."""
+    if not compose_yaml:
+        return {"webui": None, "agent": None}
+    return {
+        "webui": _tag_of(_image_of(compose_yaml, WEBUI_IMAGE_HINT)),
+        "agent": _tag_of(_image_of(compose_yaml, AGENT_IMAGE_HINT)),
+    }
+
+
+def detect_versions(base_url: str, compose_yaml: str | None = None,
+                    timeout: float = 8.0) -> dict[str, str | None]:
+    """Versions installées. Le compose fait foi ; la page de connexion
+    confirme l'interface (et la corrige si le compose suit un tag flottant)."""
+    found = versions_from_compose(compose_yaml)
+    live = version_from_login_page(base_url, timeout=timeout)
+    if live:
+        found["webui"] = live
+    return {k: v for k, v in found.items() if v} or {}

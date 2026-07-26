@@ -137,8 +137,16 @@ def detect_installed_versions(tenant: Tenant) -> bool:
     l'hôte). Sans cette lecture, on ne saurait qu'affirmer — à tort — qu'il
     est à jour. Retourne True si une version a pu être lue."""
     from . import agent_probe
+    from .coolify import get_client
 
-    found = agent_probe.detect_versions(tenant.instance_url, tenant.instance_password)
+    compose = None
+    client = get_client()
+    if client and tenant.coolify_service_uuid:
+        try:
+            compose = client.get_compose_raw(tenant.coolify_service_uuid)
+        except Exception:
+            compose = None
+    found = agent_probe.detect_versions(tenant.instance_url, compose)
     changed = False
     if found.get("webui"):
         tenant.hermes_webui_version = found["webui"]

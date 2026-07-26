@@ -1991,9 +1991,31 @@ class _FakeCoolify:
     utilisé — c'est tout l'enjeu : un appel qui ne tire pas les images donne
     une « mise à jour » qui ne met rien à jour."""
 
-    def __init__(self, restart_ok=True):
+    # Compose tel que Coolify le livre réellement : versions ÉPINGLÉES —
+    # tag figé pour l'interface, digest pour le moteur (relevé sur une
+    # installation réelle). C'est ce qui rend un simple « pull » inopérant.
+    PINNED_COMPOSE = (
+        "services:\n"
+        "  hermes-agent:\n"
+        "    image: nousresearch/hermes-agent@sha256:2f1f2f1725e5dc9a61cf6a2dea5aca52\n"
+        "  hermes-webui:\n"
+        "    image: ghcr.io/nesquena/hermes-webui:0.51.92\n"
+    )
+
+    def __init__(self, restart_ok=True, compose=None, accept_compose=True):
         self.calls = []
         self.restart_ok = restart_ok
+        self.compose = self.PINNED_COMPOSE if compose is None else compose
+        self.accept_compose = accept_compose
+
+    def get_compose_raw(self, uuid):
+        return self.compose
+
+    def update_compose_raw(self, uuid, yaml_text):
+        self.calls.append(("compose", uuid, yaml_text))
+        if self.accept_compose:
+            self.compose = yaml_text
+        return self.accept_compose
 
     def trigger_deploy(self, uuid, force=False):
         self.calls.append(("deploy", uuid, force)); return True
@@ -2031,6 +2053,9 @@ def test_update_pulls_the_latest_images_of_both_containers(monkeypatch):
     from app.db import SessionFactory
     from app.models import Tenant
 
+    from app.models import Setting
+    from app import agent_updates as au
+
     fake = _FakeCoolify()
     monkeypatch.setattr(provisioning, "get_client", lambda: fake)
 
@@ -2038,6 +2063,7 @@ def test_update_pulls_the_latest_images_of_both_containers(monkeypatch):
     with SessionFactory() as s:
         tenant = s.get(Tenant, aid)
         tenant.coolify_service_uuid = "svc-pull"
+        s.merge(Setting(key=au.WEBUI_LATEST_KEY, value="0.52.149"))
         s.commit()
         provisioning.ProvisioningEngine(s)._step_update_service(tenant, None)
 
@@ -2046,6 +2072,12 @@ def test_update_pulls_the_latest_images_of_both_containers(monkeypatch):
         "un /deploy ne tire pas les images sur un Service : la mise à jour "
         "serait sans effet"
     )
+    # Et surtout : les images ont été REPOINTÉES avant le tirage. Sans cela,
+    # `docker compose pull` récupérerait la même image épinglée.
+    written = [c[2] for c in fake.calls if c[0] == "compose"]
+    assert written, "le compose doit être réécrit, sinon rien ne change"
+    assert "hermes-webui:0.52.149" in written[0], written[0]
+    assert "sha256:" not in written[0], "le digest du moteur doit être levé"
 
 
 def test_update_fails_loudly_when_images_cannot_be_pulled(monkeypatch):
@@ -2103,3 +2135,63 @@ def test_new_deployment_survives_a_refused_pull(monkeypatch):
         s.commit()
         detail = provisioning.ProvisioningEngine(s)._step_start_service(tenant, None)
     assert detail  # l'étape aboutit malgré tout
+
+
+def test_retag_compose_lifts_the_pinning_that_blocks_updates():
+    """Le template épingle les versions : tag figé pour l'interface, digest
+    pour le moteur. Tant que ces références ne sont pas réécrites, aucun
+    tirage d'image ne peut apporter quoi que ce soit."""
+    from app.provisioning import retag_compose
+
+    pinned = _FakeCoolify.PINNED_COMPOSE
+    patched, changes = retag_compose(pinned, "0.52.149")
+    assert patched and changes
+    assert "ghcr.io/nesquena/hermes-webui:0.52.149" in patched
+    assert "@sha256:" not in patched
+    assert "nousresearch/hermes-agent:latest" in patched
+
+    # Idempotent : rien à écrire si les images pointent déjà au bon endroit
+    again, _ = retag_compose(patched, "0.52.149")
+    assert again is None
+
+    # Sans version publiée connue, on ne touche pas à l'interface
+    only_agent, _ = retag_compose(pinned, None)
+    assert "hermes-webui:0.51.92" in only_agent
+
+
+def test_installed_version_read_without_any_authentication(monkeypatch):
+    """La version se lit sur la page de connexion (`?v=v0.51.92`) et dans le
+    compose — sans mot de passe. L'ancienne sonde tentait d'ouvrir une session
+    et emplissait le journal du client de connexions refusées."""
+    from app import agent_probe
+
+    class _Resp:
+        status_code = 200
+        text = '<script src="/static/login.js?v=v0.51.92"></script>'
+
+    class _Client:
+        def __init__(self, **kw): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def get(self, url):
+            assert url.endswith("/login"), url
+            return _Resp()
+        def post(self, *a, **kw):  # aucune tentative de connexion
+            raise AssertionError("la sonde ne doit PAS tenter de s'authentifier")
+
+    monkeypatch.setattr(agent_probe.httpx, "Client", _Client)
+    found = agent_probe.detect_versions("https://agent.example.test",
+                                        _FakeCoolify.PINNED_COMPOSE)
+    assert found["webui"] == "0.51.92"
+    assert found["agent"].startswith("sha256:")
+
+
+def test_versions_from_compose_ignores_floating_tags():
+    """Un tag flottant ne dit rien de ce qui tourne : mieux vaut « inconnue »
+    qu'une version inventée."""
+    from app.agent_probe import versions_from_compose
+
+    floating = ("services:\n  hermes-webui:\n    image: ghcr.io/nesquena/hermes-webui:latest\n"
+                "  hermes-agent:\n    image: nousresearch/hermes-agent\n")
+    assert versions_from_compose(floating) == {"webui": None, "agent": None}
+    assert versions_from_compose(None) == {"webui": None, "agent": None}

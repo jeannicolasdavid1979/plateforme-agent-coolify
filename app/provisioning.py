@@ -143,6 +143,57 @@ def customize_compose(compose_yaml: str, fqdn_url: str) -> tuple[str | None, lis
     return yaml.safe_dump(doc, sort_keys=False, allow_unicode=True), changes
 
 
+def retag_compose(compose_yaml: str, webui_version: str | None) -> tuple[str | None, list[str]]:
+    """Pointe les images du compose sur les versions à installer.
+
+    C'est LE geste qui met à jour. Le template Coolify épingle les versions —
+    `ghcr.io/nesquena/hermes-webui:0.51.92`, et l'agent par digest
+    (`@sha256:…`). Un `docker compose pull` sur une référence épinglée retire
+    exactement la MÊME image : sans réécrire ces références, aucune mise à
+    jour n'est possible, quel que soit l'appel d'API utilisé.
+
+    L'interface reçoit le numéro de version publié. Le moteur n'a pas de
+    versions publiées (il suit sa branche principale), on le bascule donc sur
+    `latest` — ce qui lève au passage son épinglage par digest.
+
+    Retourne (yaml modifié | None si rien à changer, liste des changements).
+    """
+    try:
+        doc = yaml.safe_load(compose_yaml)
+        services = doc["services"]
+        assert isinstance(services, dict)
+    except Exception as exc:
+        logger.warning("compose illisible : %s", exc)
+        return None, [f"compose illisible ({exc})"]
+
+    changes: list[str] = []
+    for name, svc in services.items():
+        if not isinstance(svc, dict):
+            continue
+        image = str(svc.get("image", ""))
+        if not image:
+            continue
+        base = image.split("@", 1)[0]           # retire un éventuel digest
+        repo = base.rsplit(":", 1)[0] if ":" in base.rsplit("/", 1)[-1] else base
+
+        if "hermes-webui" in image or "webui" in str(name):
+            if not webui_version:
+                continue
+            wanted = f"{repo}:{webui_version}"
+        elif "hermes-agent" in image or "hermes-agent" in str(name):
+            wanted = f"{repo}:latest"
+        else:
+            continue
+
+        if wanted != image:
+            svc["image"] = wanted
+            changes.append(f"{name} : {image} → {wanted}")
+
+    if not changes:
+        return None, ["images déjà aux versions demandées"]
+    return yaml.safe_dump(doc, sort_keys=False, allow_unicode=True), changes
+
+
 class ProvisioningEngine:
     def __init__(self, db: Session):
         self.db = db
@@ -446,10 +497,28 @@ class ProvisioningEngine:
             raise RuntimeError("Service Coolify non trouvé")
 
         svc_uuid = tenant.coolify_service_uuid
-        # Le SEUL appel qui met réellement à jour : Coolify exécute alors un
-        # `docker compose pull` — donc les DEUX conteneurs du compose, le
-        # moteur de l'agent comme son interface — puis recrée les conteneurs.
-        # Un simple /deploy réutiliserait les images déjà en cache sur l'hôte.
+        details: list[str] = []
+
+        # 1. Pointer le compose sur les versions à installer. Indispensable :
+        #    le template ÉPINGLE les versions (tag figé pour l'interface,
+        #    digest pour le moteur) — sans cette réécriture, le tirage
+        #    récupérerait exactement les mêmes images.
+        from . import agent_updates
+
+        latest = agent_updates.get_cached_latest_versions(self.db)
+        compose = client.get_compose_raw(svc_uuid)
+        if compose:
+            patched, changes = retag_compose(compose, latest.get("webui"))
+            if patched and client.update_compose_raw(svc_uuid, patched):
+                details.extend(changes)
+            elif patched:
+                raise RuntimeError(
+                    "votre hébergeur a refusé de changer de version"
+                )
+
+        # 2. Tirer les images ainsi désignées : Coolify exécute alors un
+        #    `docker compose pull` — donc les DEUX conteneurs, le moteur de
+        #    l'agent comme son interface — puis recrée les conteneurs.
         if not client.restart_service(svc_uuid, pull_latest=True):
             raise RuntimeError(
                 "votre hébergeur a refusé la mise à jour (récupération des "
@@ -461,7 +530,7 @@ class ProvisioningEngine:
             raise RuntimeError(
                 f"votre agent ne redémarre pas (statut : {status or 'inconnu'})"
             )
-        return "dernières images récupérées et agent redémarré"
+        return " — ".join(details) if details else "dernières images récupérées"
 
     def _step_read_versions(self, tenant: Tenant, job: ProvisioningJob) -> str:
         """Relit la version installée SUR l'agent après le redéploiement —

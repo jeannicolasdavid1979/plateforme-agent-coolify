@@ -10,11 +10,13 @@ Les dates suivent l'ordre de développement.
   se fait toute seule à l'affichage, le client voit la version installée et la
   dernière publiée, et déclenche la mise à jour lui-même. Le pilotage
   n'existait que côté admin.
-- **Lecture de la version RÉELLEMENT installée** (`app/agent_probe.py`) : le
-  template tire ses images sur des tags flottants (`latest`), le tag ne dit
-  donc pas ce qui tourne — un agent fraîchement déployé peut déjà être en
-  retard si l'hôte avait l'image en cache. La plateforme ouvre une session sur
-  l'agent avec le mot de passe qu'elle détient et lit sa version.
+- **Lecture de la version RÉELLEMENT installée** (`app/agent_probe.py`),
+  par deux sources sans authentification : les images épinglées dans le
+  compose Coolify (ce que l'hôte lance) et la page de connexion de l'agent,
+  qui porte sa version (`/static/login.js?v=v0.51.92`).
+  La première version de cette sonde tentait d'ouvrir une session sur l'agent :
+  inutile — la version est publique — et néfaste, la rafale d'essais
+  emplissant le journal du client de connexions refusées.
 
 ### Corrigé
 - **« Agent introuvable » sur l'agent d'un client, depuis l'admin** : la
@@ -29,6 +31,13 @@ Les dates suivent l'ordre de développement.
 - **Une mise à jour rejouait un déploiement complet** : `run_job` parcourait
   toujours les étapes de création au lieu de celles enregistrées dans le job —
   un agent mis à jour se serait vu attribuer un **second service Coolify**.
+- **Les versions sont ÉPINGLÉES dans le compose** — c'est la cause racine.
+  Le template Coolify fige l'interface sur un tag (`hermes-webui:0.51.92`) et
+  le moteur sur un digest (`@sha256:…`). Un `docker compose pull` sur une
+  référence épinglée retire exactement la MÊME image : aucun appel d'API,
+  quel qu'il soit, ne pouvait mettre à jour quoi que ce soit. La mise à jour
+  réécrit désormais ces références avant de tirer les images — et c'est aussi
+  ce qui explique qu'un agent neuf naisse en 0.51.92.
 - **La mise à jour ne mettait rien à jour.** Elle passait par
   `/deploy?force=true` — or, dans les sources de Coolify, le contrôleur de
   l'API appelle `StartService::run($resource)` pour un *Service* **sans le
