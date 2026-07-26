@@ -2104,19 +2104,32 @@ def test_new_deployment_pulls_the_latest_images(monkeypatch):
     from app.db import SessionFactory
     from app.models import Tenant
 
+    from app.models import Setting
+    from app import agent_updates as au
+
     fake = _FakeCoolify()
     monkeypatch.setattr(provisioning, "get_client", lambda: fake)
+    monkeypatch.setattr(au, "fetch_latest_versions",
+                        lambda timeout=6.0: {"webui": "0.52.149", "agent": "07e97d2f"})
 
     _headers, aid = _updatable_agent("fresh@ex.io", "fresh-agent")
     with SessionFactory() as s:
         tenant = s.get(Tenant, aid)
         tenant.coolify_service_uuid = "svc-fresh"
+        s.merge(Setting(key=au.WEBUI_LATEST_KEY, value="0.52.149"))
         s.commit()
         provisioning.ProvisioningEngine(s)._step_start_service(tenant, None)
 
     kinds = [c[0] for c in fake.calls]
     assert kinds[0] == "deploy"                       # domaine et labels Traefik
     assert ("restart", "svc-fresh", True) in fake.calls  # puis dernières images
+    # Et les références épinglées du modèle ont été repointées AVANT le tirage,
+    # sinon l'agent neuf naîtrait sur la version du modèle (constaté : 0.51.92).
+    written = [c[2] for c in fake.calls if c[0] == "compose"]
+    assert written and "hermes-webui:0.52.149" in written[0], fake.calls
+    retag_at = next(i for i, c in enumerate(fake.calls) if c[0] == "compose")
+    pull_at = fake.calls.index(("restart", "svc-fresh", True))
+    assert retag_at < pull_at, "repointer les images APRÈS le tirage ne sert à rien"
 
 
 def test_new_deployment_survives_a_refused_pull(monkeypatch):

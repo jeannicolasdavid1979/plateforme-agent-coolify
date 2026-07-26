@@ -47,11 +47,12 @@ Les dates suivent l'ordre de développement.
   qui déclenche un `docker compose pull` — couvrant **les deux conteneurs**
   du compose, le moteur de l'agent comme son interface. Un refus de l'hôte
   fait maintenant échouer l'étape au lieu d'annoncer un succès en trompe-l'œil.
-- **Un agent neuf naissait déjà en retard** : le premier déploiement ne tirait
-  pas les images non plus, et l'hôte servait celles qu'il avait en cache
-  (constaté : un agent fraîchement déployé en 0.51.92 face à 0.52.149 publié).
-  La livraison récupère désormais les dernières versions — sans bloquer la
-  mise en ligne si l'hôte refuse.
+- **Un agent neuf naissait déjà en retard** (constaté : 0.51.92 livré alors
+  que 0.52.149 était publié). Le premier déploiement repointe maintenant les
+  images du modèle sur la dernière version publiée AVANT de les tirer — sans
+  cela, le tirage rapportait les mêmes images épinglées. Étape non bloquante :
+  un agent livré sur une version un peu ancienne reste un agent qui
+  fonctionne, et son client pourra le mettre à jour d'un clic.
 - **« À jour » affirmé sans rien avoir constaté** : la version amont était
   recopiée sur l'agent comme s'il l'avait installée. L'état « à jour » ne
   s'affiche plus que sur une version LUE sur l'agent ; sinon l'interface dit

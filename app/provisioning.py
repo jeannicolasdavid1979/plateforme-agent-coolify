@@ -413,15 +413,31 @@ class ProvisioningEngine:
         if not client.trigger_deploy(svc_uuid):
             client.start_service(svc_uuid)
 
-        # Puis on récupère les DERNIÈRES images : le template suit des tags
-        # flottants, et sans tirage explicite l'hôte sert celles qu'il a déjà
-        # en cache — un agent tout neuf naissait déjà en retard. Non bloquant :
-        # un agent livré sur une image un peu ancienne reste un agent qui
-        # fonctionne, et le client pourra le mettre à jour.
+        # Livrer un agent NEUF déjà à jour. Le template épingle ses versions
+        # (tag figé pour l'interface, digest pour le moteur) : sans repointer
+        # ces références, le tirage rapporte exactement les mêmes images et
+        # l'agent naît en retard. Toute cette étape est NON BLOQUANTE — un
+        # agent livré sur une version un peu ancienne reste un agent qui
+        # fonctionne, et son client pourra le mettre à jour d'un clic.
+        from . import agent_updates
+
+        try:
+            latest = agent_updates.refresh_latest_versions(self.db, max_age_s=3600)
+            compose = client.get_compose_raw(svc_uuid)
+            if compose and latest.get("webui"):
+                patched, changes = retag_compose(compose, latest["webui"])
+                if patched and client.update_compose_raw(svc_uuid, patched):
+                    logger.info("Versions de %s : %s", tenant.subdomain, "; ".join(changes))
+        except Exception as exc:
+            logger.warning(
+                "Versions de %s non repointées (%s) — agent livré sur les "
+                "versions du modèle", tenant.subdomain, exc,
+            )
+
         if not client.restart_service(svc_uuid, pull_latest=True):
             logger.warning(
-                "Tirage des dernières images refusé pour %s — agent démarré "
-                "sur les images en cache de l'hôte", tenant.subdomain,
+                "Tirage des images refusé pour %s — agent démarré sur les "
+                "images en cache de l'hôte", tenant.subdomain,
             )
 
         status = client.wait_running(svc_uuid, timeout=240)
