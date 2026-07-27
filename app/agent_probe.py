@@ -80,6 +80,27 @@ def _tag_of(image: str | None) -> str | None:
     return None if tag in ("latest", "main", "edge") else tag
 
 
+FLOATING_TAGS = ("latest", "main", "edge")
+
+
+def follows_floating_tag(compose_yaml: str | None,
+                         hint: str = AGENT_IMAGE_HINT) -> bool:
+    """L'image de ce service suit-elle un tag mouvant (`latest`, `main`…) ?
+
+    C'est nous qui épinglons le moteur sur `latest` — le seul moyen de le
+    faire avancer, faute de tags de version publiés côté image. Conséquence :
+    le compose ne porte plus AUCUN numéro pour lui, et la fiche de l'agent
+    affichait une ligne « Agent » vide. Savoir qu'on suit un tag mouvant
+    permet de rétablir le numéro depuis la version publiée du paquet.
+    """
+    image = _image_of(compose_yaml, hint) if compose_yaml else None
+    if not image or "@sha256:" in image:
+        return False
+    ref = image.rsplit("/", 1)[-1]
+    tag = ref.rsplit(":", 1)[1] if ":" in ref else "latest"
+    return tag in FLOATING_TAGS
+
+
 def versions_from_compose(compose_yaml: str | None) -> dict[str, str | None]:
     """Versions épinglées dans le compose — ce que l'hôte lance réellement."""
     if not compose_yaml:

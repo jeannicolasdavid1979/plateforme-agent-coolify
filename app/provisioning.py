@@ -144,6 +144,16 @@ def customize_compose(compose_yaml: str, fqdn_url: str) -> tuple[str | None, lis
         logger.warning("compose illisible : %s", exc)
         return None, [f"compose illisible ({exc})"]
 
+    def _is_agent(name, svc) -> bool:
+        return "hermes-agent" in str(name) or "hermes-agent" in str(
+            (svc or {}).get("image", "")
+        )
+
+    agent_service = next(
+        (str(n) for n, s in services.items() if isinstance(s, dict) and _is_agent(n, s)),
+        None,
+    )
+
     changes: list[str] = []
     for svc_name, svc in services.items():
         if not isinstance(svc, dict):
@@ -181,15 +191,30 @@ def customize_compose(compose_yaml: str, fqdn_url: str) -> tuple[str | None, lis
 
         # 2. Entrypoint config.yaml sur le conteneur agent
         image = str(svc.get("image", ""))
-        if "hermes-agent" in image or "hermes-agent" in str(svc_name):
+        if _is_agent(svc_name, svc):
             svc["entrypoint"] = ["/bin/bash", "-c", _AGENT_BOOTSTRAP]
             changes.append(f"entrypoint config.yaml sur {svc_name}")
 
-        # 3. Autorisation de construction pour l'interface (cf. _WEBUI_ENV)
         if "hermes-webui" in image or "webui" in str(svc_name):
+            # 3. Autorisation de construction pour l'interface (cf. _WEBUI_ENV)
             for key, value in _WEBUI_ENV.items():
                 if _set_env(svc, key, value):
                     changes.append(f"{key}={value} sur {svc_name}")
+
+            # 4. Espace de processus partagé avec le moteur — c'est CE qui
+            # permet à l'interface de voir que la passerelle tourne.
+            # Sa détection lit `gateway.pid` dans le volume de données partagé,
+            # puis vérifie que le processus vit (`os.kill(pid, 0)`) : entre
+            # deux conteneurs isolés, ce numéro ne désigne rien et la réponse
+            # est toujours « passerelle absente ». Son repli — accepter un
+            # `gateway_state.json` de moins de 120 s — ne peut pas nous sauver :
+            # le moteur écrit ce fichier au démarrage puis n'y touche plus
+            # (« a healthy idle gateway never advances that timestamp »,
+            # gateway/status.py). Il ne reste donc que le partage d'espace de
+            # processus, que l'interface nomme elle-même comme la solution.
+            if agent_service:
+                svc["pid"] = f"service:{agent_service}"
+                changes.append(f"espace de processus partagé avec {agent_service}")
 
     if not changes:
         return None, ["aucune variable SERVICE_FQDN_HERMESWEBUI ni service agent trouvés"]
@@ -417,45 +442,31 @@ class ProvisioningEngine:
         if tenant.system_prompt:
             client.set_env(svc_uuid, "HERMES_SYSTEM_PROMPT", tenant.system_prompt)
 
-        # Gateway : sans lui, les tâches planifiées de l'agent ne se
-        # déclenchent JAMAIS — l'interface ne fait pas tourner l'horloge
-        # elle-même, c'est le démon du conteneur moteur qui bat la seconde
-        # (toutes les 60 s). Le client verrait « Gateway not configured » et
-        # ses tâches resteraient inertes, sans message d'erreur. Le démon est
-        # déjà là : il ne manquait que l'adresse pour l'atteindre, sur le
-        # réseau interne du compose.
-        # Coolify nomme les conteneurs « {service}-{uuid} » : c'est ce nom-là
-        # que le DNS de Docker résout à coup sûr sur le réseau du projet.
-        agent_host = f"{self._agent_service_name(client, svc_uuid)}-{svc_uuid}"
-        gateway_url = f"http://{agent_host}:8642"
-        client.set_env(svc_uuid, "HERMES_API_URL", gateway_url)
-        client.set_env(svc_uuid, "HERMES_WEBUI_GATEWAY_BASE_URL", gateway_url)
-        # L'interface cite aussi ces deux variables dans son message d'erreur :
-        # on les pose pour ne dépendre d'aucune de ses versions.
-        client.set_env(svc_uuid, "GATEWAY_HEALTH_URL", f"{gateway_url}/health")
-        client.set_env(svc_uuid, "HERMES_GATEWAY_HEALTH_URL", f"{gateway_url}/health")
+        # Passerelle : surtout NE PAS lui donner d'adresse de santé.
+        # L'interface (son `api/agent_health.py`) consulte dans l'ordre
+        # GATEWAY_HEALTH_URL, HERMES_GATEWAY_HEALTH_URL, HERMES_API_URL puis
+        # HERMES_WEBUI_GATEWAY_BASE_URL : dès QU'UNE SEULE est renseignée,
+        # elle abandonne sa détection locale et sonde cette adresse en HTTP.
+        # Or `hermes gateway run` n'ouvre aucun port — vérifié au fait : la
+        # commande n'a pas d'option de service HTTP, et la seule socket en
+        # écoute dans le conteneur moteur est le résolveur DNS de Docker. La
+        # passerelle ne fait que messagerie + planificateur.
+        # Nous avions pointé ces quatre variables vers un port 8642 imaginaire :
+        # la sonde échouait à chaque fois, d'où le bandeau « Gateway heartbeat
+        # failed » affiché en permanence au client — causé par notre propre
+        # configuration, pas par une panne. On les vide : une valeur vide vaut
+        # « non configuré », et l'interface retombe sur sa détection par PID
+        # (cf. le partage d'espace de processus posé dans customize_compose).
+        for stale in ("HERMES_API_URL", "HERMES_WEBUI_GATEWAY_BASE_URL",
+                      "GATEWAY_HEALTH_URL", "HERMES_GATEWAY_HEALTH_URL"):
+            client.set_env(svc_uuid, stale, "")
 
         # Variables magiques Coolify : c'est ELLES que le parseur de compose
         # lit pour générer les labels Traefik. Sans ça, Coolify garde le
         # domaine sslip.io généré à la création du service.
         client.set_env(svc_uuid, "SERVICE_FQDN_HERMESWEBUI", fqdn_host)
         client.set_env(svc_uuid, "SERVICE_URL_HERMESWEBUI", f"https://{fqdn_host}")
-        return f"variables, domaine et gateway ({gateway_url}) poussés"
-
-    @staticmethod
-    def _agent_service_name(client, svc_uuid: str) -> str:
-        """Nom du service moteur dans le compose — c'est lui qui fait office
-        d'hôte sur le réseau interne. Repli sur le nom du template."""
-        try:
-            doc = yaml.safe_load(client.get_compose_raw(svc_uuid) or "") or {}
-            for name, svc in (doc.get("services") or {}).items():
-                if "hermes-agent" in str(name) or "hermes-agent" in str(
-                    (svc or {}).get("image", "")
-                ):
-                    return str(name)
-        except Exception:
-            pass
-        return "hermes-agent"
+        return "variables et domaine poussés, sonde de passerelle neutralisée"
 
     def _step_set_fqdn(self, tenant: Tenant, job: ProvisioningJob) -> str:
         client = get_client()
@@ -650,7 +661,9 @@ class ProvisioningEngine:
         on constate le résultat au lieu de le présumer."""
         from . import agent_updates
 
-        if agent_updates.detect_installed_versions(tenant):
+        latest = agent_updates.get_cached_latest_versions(self.db)
+        if agent_updates.detect_installed_versions(tenant, latest.get("agent")):
             self.db.commit()
-            return f"version installée : {tenant.hermes_webui_version or '?'}"
+            return (f"versions installées : interface {tenant.hermes_webui_version or '?'}, "
+                    f"moteur {tenant.hermes_agent_version or '?'}")
         return "version non lisible pour le moment (agent en cours de démarrage)"

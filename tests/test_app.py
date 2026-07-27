@@ -332,8 +332,8 @@ services:
     # L'entrypoint qui écrit config.yaml est posé sur le conteneur agent
     assert "config.yaml" in patched and "exec /init" in patched
     # 2 variables de domaine + l'entrypoint agent + l'autorisation de
-    # construction côté interface
-    assert len(changes) == 4
+    # construction et le partage d'espace de processus côté interface
+    assert len(changes) == 5
 
     # Un compose sans rien de reconnaissable ne casse pas
     patched, changes = customize_compose("services:\n  autre:\n    image: nginx\n", "https://x.y")
@@ -2215,9 +2215,19 @@ def test_versions_from_compose_ignores_floating_tags():
     assert versions_from_compose(None) == {"webui": None, "agent": None}
 
 
-def test_gateway_is_configured_at_creation(monkeypatch):
-    """Sans gateway, les tâches planifiées du client ne se déclenchent JAMAIS
-    (l'interface ne bat pas la seconde elle-même) — et rien ne le signale."""
+def test_no_http_probe_url_is_pushed_for_the_gateway(monkeypatch):
+    """La passerelle n'écoute sur AUCUN port : `hermes gateway run` n'a pas
+    d'option de service HTTP, et la seule socket en écoute du conteneur moteur
+    est le résolveur DNS de Docker (vérifié au fait en production).
+
+    Or l'interface, dès qu'une de ces quatre variables est renseignée,
+    abandonne sa détection locale pour sonder cette adresse en HTTP. En les
+    pointant vers un port 8642 imaginaire, nous provoquions nous-mêmes le
+    bandeau « Gateway heartbeat failed » affiché en continu au client.
+
+    On les pousse donc VIDES — vide vaut « non configuré » côté interface, et
+    il faut les écraser explicitement pour nettoyer les agents déjà déployés
+    qui portent encore l'ancienne valeur."""
     from app import provisioning
     from app.db import SessionFactory
     from app.models import Tenant
@@ -2236,12 +2246,9 @@ def test_gateway_is_configured_at_creation(monkeypatch):
         s.commit()
         provisioning.ProvisioningEngine(s)._step_configure_env(tenant, None)
 
-    # Coolify nomme les conteneurs « {service}-{uuid} » : c'est ce nom que le
-    # DNS de Docker résout. Le nom de service nu ne suffit pas toujours.
-    expected = "http://hermes-agent-svc-gw:8642"
-    assert pushed["HERMES_API_URL"] == expected
-    assert pushed["HERMES_WEBUI_GATEWAY_BASE_URL"] == expected
-    assert pushed["GATEWAY_HEALTH_URL"] == expected + "/health"
+    for key in ("HERMES_API_URL", "HERMES_WEBUI_GATEWAY_BASE_URL",
+                "GATEWAY_HEALTH_URL", "HERMES_GATEWAY_HEALTH_URL"):
+        assert pushed[key] == "", f"{key} doit être vidée, pas renseignée"
 
 
 def test_agent_entrypoint_starts_the_gateway_through_the_image_own_wrapper():
@@ -2294,6 +2301,54 @@ def test_webui_is_allowed_to_build_the_engine_dependencies():
     # côté interface, on ne la propage pas à un conteneur qui ne construit rien.
     assert "environment" not in services["hermes-agent"]
     assert any("HERMES_NIX_BUILD" in c for c in changes)
+
+
+def test_engine_version_survives_the_floating_tag():
+    """Après un « Forcer », la fiche n'affichait plus que la version de
+    l'interface, la ligne « Agent » restant vide. C'est nous qui épinglons le
+    moteur sur `latest` — sans numéro dans le compose, il n'y avait plus rien à
+    lire. Mais épingler `latest` puis forcer un `pull` a une conséquence
+    directe : le moteur installé EST la dernière version publiée."""
+    from app import agent_probe, agent_updates
+    from app.models import Tenant
+
+    compose = ("services:\n"
+               "  hermes-agent:\n    image: nousresearch/hermes-agent:latest\n")
+    assert agent_probe.follows_floating_tag(compose) is True
+    # Une version épinglée n'est PAS un tag mouvant : on ne doit alors rien
+    # présumer, le compose fait foi.
+    pinned = compose.replace(":latest", ":v2026.7.20")
+    assert agent_probe.follows_floating_tag(pinned) is False
+
+    # Sans compose lisible, on ne présume RIEN : pas de compose, pas de tag
+    # mouvant constaté, donc aucune version inventée.
+    tenant = Tenant(instance_url="", coolify_service_uuid=None)
+    assert agent_updates.detect_installed_versions(tenant, "0.19.0") is False
+    assert tenant.hermes_agent_version is None
+
+
+def test_webui_shares_the_engine_process_namespace():
+    """C'est la SEULE façon pour l'interface de voir tourner la passerelle.
+
+    Sa détection lit `gateway.pid` dans le volume partagé puis vérifie que le
+    processus vit (`os.kill(pid, 0)`) : entre conteneurs isolés, ce numéro ne
+    désigne rien et la réponse est toujours « passerelle absente ». Son repli
+    — un `gateway_state.json` de moins de 120 s — ne peut pas aboutir non
+    plus : le moteur écrit ce fichier au démarrage et n'y retouche jamais
+    (« a healthy idle gateway never advances that timestamp »)."""
+    import yaml
+    from app.provisioning import customize_compose
+
+    compose = ("services:\n"
+               "  moteur-maison:\n    image: nousresearch/hermes-agent\n"
+               "  hermes-webui:\n    image: ghcr.io/nesquena/hermes-webui:0.52.76\n"
+               "    environment:\n      - SERVICE_FQDN_HERMESWEBUI=x\n")
+    patched, _ = customize_compose(compose, "https://a.example.test")
+    services = yaml.safe_load(patched)["services"]
+
+    # Le nom du service moteur vient du compose, il n'est pas présumé.
+    assert services["hermes-webui"]["pid"] == "service:moteur-maison"
+    assert "pid" not in services["moteur-maison"]
 
 
 def test_agent_exposes_its_last_update_for_the_waiting_screen():

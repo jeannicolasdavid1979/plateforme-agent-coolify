@@ -159,7 +159,7 @@ def check_updates_available(tenant: Tenant, latest_versions: dict[str, str | Non
     return updates
 
 
-def detect_installed_versions(tenant: Tenant) -> bool:
+def detect_installed_versions(tenant: Tenant, latest_agent: str | None = None) -> bool:
     """Interroge l'agent pour connaître sa version réellement installée.
 
     Indispensable : le template tire des images sur des tags flottants, donc
@@ -183,6 +183,15 @@ def detect_installed_versions(tenant: Tenant) -> bool:
         changed = True
     if found.get("agent"):
         tenant.hermes_agent_version = found["agent"]
+        changed = True
+    elif latest_agent and agent_probe.follows_floating_tag(compose):
+        # Le compose ne porte aucun numéro pour le moteur : c'est nous qui
+        # l'épinglons sur `latest`, faute de tags de version publiés côté
+        # image. La fiche affichait donc une ligne « Agent » vide, alors même
+        # que la mise à jour venait de réussir. Or épingler `latest` PUIS
+        # forcer un `pull` à chaque mise à jour a une conséquence directe :
+        # le moteur installé EST la dernière version publiée du paquet.
+        tenant.hermes_agent_version = latest_agent
         changed = True
     return changed
 

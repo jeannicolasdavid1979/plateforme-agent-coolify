@@ -3,6 +3,38 @@
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/).
 Les dates suivent l'ordre de développement.
 
+## [Non publié — branche de test] — « Gateway heartbeat failed » : c'était nous
+
+### Corrigé
+- **Le bandeau d'alerte permanent venait de notre propre configuration.**
+  L'interface consulte, dans l'ordre, `GATEWAY_HEALTH_URL`,
+  `HERMES_GATEWAY_HEALTH_URL`, `HERMES_API_URL` puis
+  `HERMES_WEBUI_GATEWAY_BASE_URL` : dès qu'UNE SEULE est renseignée, elle
+  abandonne sa détection locale et sonde cette adresse en HTTP. Nous posions
+  les quatre vers un port 8642 — qui n'existe pas. Vérifié au fait :
+  `hermes gateway run` n'a aucune option de service HTTP, et la seule socket
+  en écoute du conteneur moteur est le résolveur DNS de Docker. La passerelle
+  ne fait que messagerie + planificateur. Ces quatre variables sont désormais
+  poussées VIDES — il faut les écraser explicitement pour nettoyer les agents
+  déjà déployés.
+- **L'interface voit enfin tourner la passerelle.** Sa détection lit
+  `gateway.pid` dans le volume partagé puis vérifie que le processus vit
+  (`os.kill(pid, 0)`) : entre deux conteneurs isolés, ce numéro ne désigne
+  rien. Son repli — accepter un `gateway_state.json` de moins de 120 s — ne
+  peut pas aboutir non plus, le moteur écrivant ce fichier au démarrage et
+  n'y retouchant jamais (« a healthy idle gateway never advances that
+  timestamp », `gateway/status.py`). Le compose partage donc l'espace de
+  processus du moteur avec l'interface (`pid: service:<moteur>`), la solution
+  que l'interface nomme elle-même.
+- **La version du moteur ne s'affichait plus après un « ⚡ Forcer ».** C'est
+  nous qui épinglons le moteur sur `latest`, faute de tags de version publiés
+  côté image : le compose ne portait donc plus aucun numéro à lire, d'où une
+  ligne « Agent » vide juste après une mise à jour réussie. Épingler `latest`
+  PUIS forcer un `pull` a pourtant une conséquence directe — le moteur
+  installé est la dernière version publiée du paquet : c'est elle qui est
+  désormais enregistrée, et seulement lorsqu'un tag mouvant est réellement
+  constaté dans le compose.
+
 ## [Non publié — branche de test] — L'interface a le droit de construire les dépendances du moteur
 
 ### Corrigé

@@ -1275,7 +1275,7 @@ def check_updates(agent_id: str, user: User = Depends(current_user), db: Session
     latest = agent_updates.refresh_latest_versions(db, max_age_s=3600)
     # Version RÉELLEMENT installée, lue sur l'agent : les images sont tirées
     # sur des tags flottants, un agent tout neuf peut donc déjà être en retard.
-    agent_updates.detect_installed_versions(tenant)
+    agent_updates.detect_installed_versions(tenant, latest.get("agent"))
     tenant.last_update_check_at = datetime.now(timezone.utc)
 
     updates_available = agent_updates.check_updates_available(tenant, latest)
