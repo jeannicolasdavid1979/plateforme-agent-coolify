@@ -1820,34 +1820,37 @@ function renderMyUpdates(id, d) {
       : `<b>${eur(p.cost_eur)} €</b>`;
   const ctaPrice = p.admin_free ? 'gratuit' : p.can_use_free ? 'offert' : eur(p.cost_eur) + ' €';
   const cta = `<div class="upd-cta"><button onclick="applyMyUpdate('${id}')">⬆ Mettre à jour mon agent — ${ctaPrice}</button></div>`;
-  const installed = d.detected
-    ? `<span class="vers">${d.current.webui || '—'}</span>`
-    : '<i>non détectée</i>';
-  const latest = (d.available && d.available.webui)
-    ? `<span class="vers">${d.available.webui}</span>` : '<i>indisponible</i>';
+
+  // Un agent, c'est DEUX briques : l'interface de discussion et le moteur.
+  // Elles se mettent à jour ensemble mais ont leurs propres numéros — les
+  // mélanger produisait un « nouvelle version disponible » suivi de deux
+  // numéros identiques, incompréhensible.
+  const vers = (v) => v ? `<span class="vers">${v}</span>` : '<i>non détectée</i>';
+  const line = (label, current, upstream) => {
+    if (current && upstream && current !== upstream)
+      return `<div>⬆ <b>${label}</b> : ${vers(current)} → ${vers(upstream)}</div>`;
+    if (current && upstream && current === upstream)
+      return `<div>✅ ${label} : ${vers(current)} — à jour</div>`;
+    return `<div>• ${label} : installée ${vers(current)}, publiée ${vers(upstream)}</div>`;
+  };
+
+  const rows = line('Interface de discussion', d.current.webui, (d.available || {}).webui)
+             + line("Moteur de l'agent", d.current.agent, (d.available || {}).agent);
 
   el.box.classList.toggle('has-update', !d.up_to_date);
 
   if (d.up_to_date) {
-    el.body.innerHTML = `✅ Votre agent est à jour — version ${installed}.`;
+    el.body.innerHTML = `✅ <b>Votre agent est à jour.</b>${rows}`;
     return;
   }
-  if (d.updates && d.updates.length) {
-    el.body.innerHTML =
-      `⬆ <b>Une nouvelle version est disponible.</b><br>` +
-      `Installée : ${installed} — disponible : ${latest}.<br>` +
-      `Mise à jour ${price}.` + cta +
-      `<div class="upd-note">Votre agent redémarre pendant l'opération ` +
-      `(environ une minute) ; ses conversations sont conservées.</div>`;
-    return;
-  }
-  // Version illisible : on ne prétend pas que tout va bien, et on laisse la
-  // main — une nouvelle installation apporte la dernière version publiée.
+  const hasGap = d.updates && d.updates.length;
   el.body.innerHTML =
-    `Version installée : ${installed} — dernière version publiée : ${latest}.<br>` +
-    `Mise à jour ${price}.` + cta +
-    `<div class="upd-note">La version de votre agent n'a pas pu être lue. ` +
-    `Mettre à jour installe la dernière version publiée.</div>`;
+    (hasGap ? '⬆ <b>Une nouvelle version est disponible.</b>'
+            : "<b>Version incomplètement détectée.</b>") +
+    rows + `<div style="margin-top:6px">Mise à jour ${price}.</div>` + cta +
+    `<div class="upd-note">Les deux briques sont mises à jour ensemble. ` +
+    `Votre agent redémarre pendant l'opération (environ une minute) ; ` +
+    `ses conversations sont conservées.</div>`;
 }
 
 async function applyMyUpdate(id) {

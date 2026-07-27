@@ -2298,3 +2298,20 @@ def test_engine_version_is_the_published_number_not_a_commit(monkeypatch):
     assert found == {"webui": "0.52.149", "agent": "0.19.0"}
     assert any("pypi.org/pypi/hermes-agent" in u for u in seen), seen
     assert not any("/commits/" in u for u in seen), "plus d'empreinte de commit"
+
+
+def test_no_false_gap_from_an_opaque_identifier():
+    """Une empreinte de commit n'est pas une version : la comparer à « 0.19.0 »
+    fabriquait un écart permanent, et affichait « 07e97d2f » au client."""
+    from app.agent_updates import check_updates_available, comparable
+    from app.models import Tenant
+
+    assert comparable("07e97d2f") is None
+    assert comparable("sha256:2f1f2f172") is None
+    assert comparable("0.19.0") == "0.19.0"
+    assert comparable(None) is None
+
+    t = Tenant(name="x", subdomain="x", user_id="u")
+    t.hermes_webui_version, t.hermes_agent_version = "0.52.76", "07e97d2f"
+    updates = check_updates_available(t, {"webui": "0.52.76", "agent": "0.19.0"})
+    assert updates == [], "aucun écart chiffrable ne doit être annoncé"

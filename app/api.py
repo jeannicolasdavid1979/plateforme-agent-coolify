@@ -1287,8 +1287,10 @@ def check_updates(agent_id: str, user: User = Depends(current_user), db: Session
     # L'admin ne paie jamais : l'interface annonce la gratuité au lieu d'un prix.
     return {
         "agent_id": agent_id,
-        "current": {"webui": tenant.hermes_webui_version,
-                    "agent": tenant.hermes_agent_version},
+        # Une empreinte opaque n'est pas une version : on préfère l'avouer
+        # plutôt que d'afficher « 07e97d2f » au client.
+        "current": {"webui": agent_updates.comparable(tenant.hermes_webui_version),
+                    "agent": agent_updates.comparable(tenant.hermes_agent_version)},
         "detected": detected,
         "available": latest,
         "updates": updates_available,

@@ -18,6 +18,7 @@ parcours client à cause d'une API tierce.
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -120,6 +121,21 @@ def cache_latest_versions(db: Session, versions: dict[str, str | None]) -> None:
 
 COMPONENT_LABELS = {"webui": "Interface de discussion", "agent": "Moteur de l'agent"}
 
+# Empreinte de commit ou de couche Docker : ce sont des identifiants, pas des
+# versions. Les comparer à un numéro publié (0.19.0) fabriquerait un écart à
+# chaque relevé — l'ancien schéma en a laissé en base.
+_OPAQUE_RE = re.compile(r"^(sha256:)?[0-9a-f]{7,64}$", re.I)
+
+
+def comparable(version: str | None) -> str | None:
+    """La valeur peut-elle se comparer à un numéro de version publié ?"""
+    if not version:
+        return None
+    v = version.strip()
+    if _OPAQUE_RE.match(v) and not re.search(r"\d+\.\d+", v):
+        return None
+    return v
+
 
 def check_updates_available(tenant: Tenant, latest_versions: dict[str, str | None]) -> list[dict]:
     """Écart entre les versions déployées pour cet agent et l'amont.
@@ -129,8 +145,8 @@ def check_updates_available(tenant: Tenant, latest_versions: dict[str, str | Non
     une mise à jour qu'on est incapable de constater. Sa version est alignée
     sur l'amont au premier relevé, et les écarts suivants seront réels."""
     updates: list[dict] = []
-    for component, current in (("webui", tenant.hermes_webui_version),
-                               ("agent", tenant.hermes_agent_version)):
+    for component, current in (("webui", comparable(tenant.hermes_webui_version)),
+                               ("agent", comparable(tenant.hermes_agent_version))):
         upstream = latest_versions.get(component)
         if not upstream or not current or current == upstream:
             continue
