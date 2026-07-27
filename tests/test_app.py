@@ -331,7 +331,9 @@ services:
     assert "SERVICE_URL_HERMESWEBUI=https://artiste.kechlab.com" in patched
     # L'entrypoint qui écrit config.yaml est posé sur le conteneur agent
     assert "config.yaml" in patched and "exec /init" in patched
-    assert len(changes) == 3
+    # 2 variables de domaine + l'entrypoint agent + l'autorisation de
+    # construction côté interface
+    assert len(changes) == 4
 
     # Un compose sans rien de reconnaissable ne casse pas
     patched, changes = customize_compose("services:\n  autre:\n    image: nginx\n", "https://x.y")
@@ -2267,6 +2269,31 @@ def test_agent_entrypoint_starts_the_gateway_through_the_image_own_wrapper():
     # sous-chaîne littérale qui casserait sur un repli anodin.
     entrypoint_script = yaml.safe_load(patched)["services"]["hermes-agent"]["entrypoint"][2]
     assert "exec /init /opt/hermes/docker/main-wrapper.sh gateway run" in entrypoint_script
+
+
+def test_webui_is_allowed_to_build_the_engine_dependencies():
+    """L'interface installe les dépendances du moteur au démarrage à partir de
+    la source partagée. Les versions récentes du moteur refusent cette
+    construction (« Building wheels or sdists for hermes-agent is not
+    supported ») : sans HERMES_NIX_BUILD, l'interface repart en boucle de
+    redémarrage — constaté en production dès le passage de 0.15 à la version
+    courante, l'agent tournant pourtant, lui, parfaitement."""
+    import yaml
+    from app.provisioning import customize_compose
+
+    compose = ("services:\n"
+               "  hermes-agent:\n    image: nousresearch/hermes-agent\n"
+               "  hermes-webui:\n    image: ghcr.io/nesquena/hermes-webui:0.52.76\n"
+               "    environment:\n      - SERVICE_FQDN_HERMESWEBUI=x\n")
+    patched, changes = customize_compose(compose, "https://a.example.test")
+    services = yaml.safe_load(patched)["services"]
+
+    webui_env = services["hermes-webui"]["environment"]
+    assert "HERMES_NIX_BUILD=1" in webui_env
+    # …et surtout pas sur le moteur : la variable ne concerne que l'installation
+    # côté interface, on ne la propage pas à un conteneur qui ne construit rien.
+    assert "environment" not in services["hermes-agent"]
+    assert any("HERMES_NIX_BUILD" in c for c in changes)
 
 
 def test_agent_exposes_its_last_update_for_the_waiting_screen():

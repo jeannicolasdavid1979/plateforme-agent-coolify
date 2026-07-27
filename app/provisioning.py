@@ -64,6 +64,41 @@ _AGENT_BOOTSTRAP = (
 
 _FQDN_KEY_RE = re.compile(r"^SERVICE_(?:FQDN|URL)_HERMESWEBUI(?:_\d+)?$")
 
+# L'interface installe les dépendances du moteur au démarrage, en copiant la
+# source partagée (volume hermes-agent-src) puis `uv pip install`. Or les
+# versions récentes du moteur refusent cette construction :
+#   « RuntimeError: Building wheels or sdists for hermes-agent is not supported »
+# et l'interface repart alors en boucle de redémarrage (constaté en production
+# dès qu'on est passé de 0.15 à la version courante). Le message d'erreur du
+# moteur désigne lui-même la sortie prévue : l'installateur officiel Nix pose
+# HERMES_NIX_BUILD=1 pour autoriser ce cas. Sans cette variable, l'interface
+# ne démarre au mieux qu'en mode réduit (pas de détection des modèles, pas de
+# routage de personnalité, pas d'import des sessions CLI).
+_WEBUI_ENV = {"HERMES_NIX_BUILD": "1"}
+
+
+def _set_env(svc: dict, key: str, value: str) -> bool:
+    """Pose une variable d'environnement sur un service du compose, quelle que
+    soit la forme utilisée (liste `CLE=valeur` ou dictionnaire). Retourne True
+    si le compose a changé."""
+    env = svc.get("environment")
+    if isinstance(env, list):
+        for i, entry in enumerate(env):
+            if str(entry).split("=", 1)[0].strip() == key:
+                if str(entry) == f"{key}={value}":
+                    return False
+                env[i] = f"{key}={value}"
+                return True
+        env.append(f"{key}={value}")
+        return True
+    if not isinstance(env, dict):
+        env = {}
+        svc["environment"] = env
+    if str(env.get(key, "")) == value:
+        return False
+    env[key] = value
+    return True
+
 
 def find_web_services(compose_yaml: str | None) -> list[str]:
     """Noms (clés du compose) des services exposés en HTTP : ceux qui portent
@@ -149,6 +184,12 @@ def customize_compose(compose_yaml: str, fqdn_url: str) -> tuple[str | None, lis
         if "hermes-agent" in image or "hermes-agent" in str(svc_name):
             svc["entrypoint"] = ["/bin/bash", "-c", _AGENT_BOOTSTRAP]
             changes.append(f"entrypoint config.yaml sur {svc_name}")
+
+        # 3. Autorisation de construction pour l'interface (cf. _WEBUI_ENV)
+        if "hermes-webui" in image or "webui" in str(svc_name):
+            for key, value in _WEBUI_ENV.items():
+                if _set_env(svc, key, value):
+                    changes.append(f"{key}={value} sur {svc_name}")
 
     if not changes:
         return None, ["aucune variable SERVICE_FQDN_HERMESWEBUI ni service agent trouvés"]
