@@ -2049,16 +2049,21 @@ async function checkAgentUpdates(agentId) {
   msgEl.textContent = '🔄 Vérification...';
   try {
     const r = await api(`/api/agents/${agentId}/check-updates`);
-    const installed = r.detected ? r.current.webui : null;
     const latest = (r.available && r.available.webui) || '?';
     const act = `<button class="ghost mini" onclick="requestAgentUpdate('${agentId}')">⚡ Mettre à jour</button>`;
+    // Un agent = DEUX briques versionnées séparément. N'afficher que celle de
+    // l'interface faisait croire, côté admin, que le moteur n'était pas suivi
+    // — alors que la fiche client, elle, montrait bien les deux.
+    const cur = r.current || {}, up = r.available || {};
+    const duo = `interface ${cur.webui || '?'} · moteur ${cur.agent || '?'}`;
     if (r.up_to_date) {
-      msgEl.textContent = `✅ À jour — version ${installed}`;
+      msgEl.textContent = `✅ À jour — ${duo}`;
       return;
     }
     if (!r.updates || r.updates.length === 0) {
       // Version illisible : on le DIT, au lieu de laisser croire que tout va bien.
-      msgEl.innerHTML = `⚠️ Version non détectée sur l'agent — dernière publiée : ${latest} ${act}`;
+      msgEl.innerHTML = `⚠️ Version non détectée (${duo}) — dernières publiées : `
+                      + `interface ${latest} · moteur ${up.agent || '?'} ${act}`;
       return;
     }
     const upd = r.updates.map(u => `${u.label || u.component} ${u.from} → ${u.to}`).join(', ');

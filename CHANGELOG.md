@@ -3,6 +3,16 @@
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/).
 Les dates suivent l'ordre de développement.
 
+## [Non publié — branche de test] — La flotte admin montre les deux versions
+
+### Corrigé
+- **« Updates » en admin n'affichait que la version de l'interface.** La
+  refonte qui avait séparé les deux briques (interface et moteur, versionnées
+  indépendamment) n'avait été appliquée qu'à la fiche client : la vue flotte
+  lisait encore le seul `current.webui` et annonçait « À jour — version
+  0.52.76 », sans un mot du moteur. Elle affiche désormais les deux, dans les
+  trois cas (à jour, écart détecté, version illisible).
+
 ## [Non publié — branche de test] — « Gateway heartbeat failed » : c'était nous
 
 ### Corrigé
