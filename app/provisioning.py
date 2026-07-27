@@ -47,14 +47,15 @@ _AGENT_BOOTSTRAP = (
     "  provider: \"auto\"\\n"
     "  base_url: \"https://openrouter.ai/api/v1\"\\n' "
     '"$${HERMES_MODEL:-openai/gpt-4o}" > /home/hermes/.hermes/config.yaml; '
-    # …puis on lance le GATEWAY. Sans cet argument, l'image démarre ses
-    # services par défaut (interface + tableau de bord) mais RIEN n'écoute sur
-    # 8642 : les tâches planifiées du client ne se déclenchent alors jamais,
-    # et l'interface affiche « Gateway endpoint not reachable ».
-    # `gateway run` est la commande documentée pour ce conteneur ; /init (s6)
-    # la reçoit comme programme principal, après sa phase d'initialisation.
-    "exec /init gateway run"
+    "exec /init"
 )
+# NE PAS passer « gateway run » en argument de /init : constaté en production,
+# s6 tente alors d'exécuter un binaire nommé « gateway » qui n'existe pas
+# (« rc.init: 91: gateway: not found »), tue ses services et boucle sur des
+# redémarrages — l'agent devient inutilisable. Le compose de référence du
+# projet passe cette commande à l'ENTRYPOINT D'ORIGINE de l'image, pas au
+# nôtre. Tant que la bonne invocation n'est pas établie sur un agent de test,
+# on laisse l'image démarrer ses services par défaut.
 
 _FQDN_KEY_RE = re.compile(r"^SERVICE_(?:FQDN|URL)_HERMESWEBUI(?:_\d+)?$")
 

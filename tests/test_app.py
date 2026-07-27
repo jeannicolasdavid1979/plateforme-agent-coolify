@@ -2080,7 +2080,7 @@ def test_update_pulls_the_latest_images_of_both_containers(monkeypatch):
     assert "sha256:" not in written[0], "le digest du moteur doit être levé"
     # La mise à jour remet aussi la configuration d'aplomb : un agent déployé
     # avant le gateway le récupère ici.
-    assert "gateway run" in written[0], "le gateway doit être posé au passage"
+    assert "exec /init" in written[0], "l'entrypoint doit être reposé au passage"
 
 
 def test_update_fails_loudly_when_images_cannot_be_pulled(monkeypatch):
@@ -2242,15 +2242,17 @@ def test_gateway_is_configured_at_creation(monkeypatch):
     assert pushed["GATEWAY_HEALTH_URL"] == expected + "/health"
 
 
-def test_agent_container_runs_the_gateway():
-    """Sans `gateway run`, rien n'écoute sur 8642 : l'interface affiche
-    « Gateway endpoint not reachable » et les tâches planifiées dorment."""
+def test_agent_entrypoint_never_passes_an_unknown_command_to_s6():
+    """Passer « gateway run » à /init faisait chercher à s6 un binaire
+    « gateway » inexistant : il tuait ses services et bouclait sur des
+    redémarrages, rendant l'agent inutilisable (constaté en production)."""
     from app.provisioning import customize_compose
 
     compose = ("services:\n  hermes-agent:\n    image: nousresearch/hermes-agent\n"
                "    environment:\n      - SERVICE_FQDN_HERMESWEBUI=x\n")
     patched, _ = customize_compose(compose, "https://a.example.test")
-    assert "gateway run" in patched, patched
+    assert "exec /init" in patched
+    assert "gateway run" not in patched, patched
 
 
 def test_agent_exposes_its_last_update_for_the_waiting_screen():
