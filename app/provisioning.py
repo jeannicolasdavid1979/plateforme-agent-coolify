@@ -47,15 +47,20 @@ _AGENT_BOOTSTRAP = (
     "  provider: \"auto\"\\n"
     "  base_url: \"https://openrouter.ai/api/v1\"\\n' "
     '"$${HERMES_MODEL:-openai/gpt-4o}" > /home/hermes/.hermes/config.yaml; '
-    "exec /init"
+    # L'image officielle a pour ENTRYPOINT [/init, /opt/hermes/docker/main-wrapper.sh]
+    # (vérifié : `docker inspect nousresearch/hermes-agent`). /init est
+    # s6-overlay ; main-wrapper.sh est le SEUL maillon qui sait résoudre
+    # « gateway run » en un exec du binaire hermes réel. Un /init nu ne le
+    # comprend pas et cherche un binaire littéral nommé « gateway »
+    # (« rc.init: 91: gateway: not found », constaté en production). Et sans
+    # passer par lui du tout, rien ne démarre le gateway : l'API agent reste
+    # muette et l'interface affiche « Agent: not detected » — constaté depuis
+    # le tout premier déploiement, bien avant qu'on ne touche à quoi que ce
+    # soit ici. Notre entrypoint (nécessaire pour écrire config.yaml avant
+    # démarrage) doit donc PRÉSERVER toute la chaîne d'origine, arguments
+    # compris, plutôt que la remplacer par un /init nu.
+    "exec /init /opt/hermes/docker/main-wrapper.sh gateway run"
 )
-# NE PAS passer « gateway run » en argument de /init : constaté en production,
-# s6 tente alors d'exécuter un binaire nommé « gateway » qui n'existe pas
-# (« rc.init: 91: gateway: not found »), tue ses services et boucle sur des
-# redémarrages — l'agent devient inutilisable. Le compose de référence du
-# projet passe cette commande à l'ENTRYPOINT D'ORIGINE de l'image, pas au
-# nôtre. Tant que la bonne invocation n'est pas établie sur un agent de test,
-# on laisse l'image démarrer ses services par défaut.
 
 _FQDN_KEY_RE = re.compile(r"^SERVICE_(?:FQDN|URL)_HERMESWEBUI(?:_\d+)?$")
 

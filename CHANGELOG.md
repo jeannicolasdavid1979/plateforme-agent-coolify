@@ -3,6 +3,26 @@
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/).
 Les dates suivent l'ordre de développement.
 
+## [Non publié — branche de test] — Le gateway démarre enfin, par le bon chemin
+
+### Corrigé
+- **« Agent: not detected » depuis le tout premier déploiement — et la
+  boucle de redémarrage d'hier étaient la MÊME cause, dans les deux sens.**
+  Vérifié au fait (`docker inspect nousresearch/hermes-agent`) : l'image a
+  pour ENTRYPOINT `[/init, /opt/hermes/docker/main-wrapper.sh]`. `/init` est
+  s6-overlay ; `main-wrapper.sh` est le SEUL maillon qui sait résoudre
+  « gateway run » en un exec du binaire réel. Notre entrypoint personnalisé
+  (nécessaire pour écrire la config du modèle avant démarrage) remplaçait
+  toute cette chaîne par un `/init` nu :
+  - lui passer « gateway run » directement (correctif d'hier) faisait
+    chercher à s6 un binaire littéral « gateway », inexistant — boucle de
+    redémarrage ;
+  - ne rien lui passer du tout (repli d'urgence d'hier) laissait l'API de
+    l'agent muette — d'où « Agent: not detected » en continu, symptôme
+    présent depuis le premier agent jamais déployé.
+  L'entrypoint préserve désormais la chaîne complète de l'image, config du
+  modèle comprise : `exec /init /opt/hermes/docker/main-wrapper.sh gateway run`.
+
 ## [Non publié — branche de test] — Bouton de secours : forcer une mise à jour
 
 ### Ajouté

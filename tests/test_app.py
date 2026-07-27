@@ -2242,17 +2242,31 @@ def test_gateway_is_configured_at_creation(monkeypatch):
     assert pushed["GATEWAY_HEALTH_URL"] == expected + "/health"
 
 
-def test_agent_entrypoint_never_passes_an_unknown_command_to_s6():
-    """Passer « gateway run » à /init faisait chercher à s6 un binaire
-    « gateway » inexistant : il tuait ses services et bouclait sur des
-    redémarrages, rendant l'agent inutilisable (constaté en production)."""
+def test_agent_entrypoint_starts_the_gateway_through_the_image_own_wrapper():
+    """L'image officielle (vérifié : `docker inspect nousresearch/hermes-agent`)
+    a pour ENTRYPOINT [/init, /opt/hermes/docker/main-wrapper.sh] — c'est ce
+    script qui sait résoudre « gateway run » en un exec du binaire hermes réel.
+
+    Deux fautes constatées en production, dans les deux sens :
+    - passer « gateway run » à un /init NU (en sautant main-wrapper.sh) fait
+      chercher à s6 un binaire littéral « gateway » inexistant
+      (« rc.init: 91: gateway: not found ») : boucle de redémarrage, agent
+      inutilisable ;
+    - ne PAS passer par le gateway du tout laisse l'API de l'agent muette :
+      l'interface affiche « Agent: not detected » en continu (constaté dès le
+      tout premier déploiement).
+    Le seul chemin qui marche préserve la chaîne complète de l'image."""
+    import yaml
     from app.provisioning import customize_compose
 
     compose = ("services:\n  hermes-agent:\n    image: nousresearch/hermes-agent\n"
                "    environment:\n      - SERVICE_FQDN_HERMESWEBUI=x\n")
     patched, _ = customize_compose(compose, "https://a.example.test")
-    assert "exec /init" in patched
-    assert "gateway run" not in patched, patched
+    # YAML peut replier la ligne pour l'affichage (le pli redevient une simple
+    # espace une fois relu) : on vérifie donc la valeur INTERPRÉTÉE, pas une
+    # sous-chaîne littérale qui casserait sur un repli anodin.
+    entrypoint_script = yaml.safe_load(patched)["services"]["hermes-agent"]["entrypoint"][2]
+    assert "exec /init /opt/hermes/docker/main-wrapper.sh gateway run" in entrypoint_script
 
 
 def test_agent_exposes_its_last_update_for_the_waiting_screen():
