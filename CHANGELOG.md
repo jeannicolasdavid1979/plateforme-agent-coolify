@@ -3,6 +3,37 @@
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/).
 Les dates suivent l'ordre de développement.
 
+## [Non publié — branche de test] — L'interface a le droit de construire les dépendances du moteur
+
+### Corrigé
+- **L'interface repartait en boucle dès que le moteur passait en version
+  récente.** Le WebUI installe les dépendances de `hermes-agent` à chaque
+  démarrage, en copiant la source partagée (volume `hermes-agent-src`) puis
+  `uv pip install` (ligne 469 de son `hermeswebui_init.bash`). Les versions
+  récentes du moteur refusent cette construction :
+  « RuntimeError: Building wheels or sdists for hermes-agent is not
+  supported ». L'installation échouait, le script s'arrêtait
+  (`error_exit`), le conteneur redémarrait — en boucle — alors que l'agent,
+  lui, tournait parfaitement à côté. Invisible tant que le volume contenait
+  l'ancienne 0.15, qui l'autorisait encore.
+  Le message d'erreur du moteur désigne lui-même la sortie prévue :
+  `HERMES_NIX_BUILD=1`, que l'installateur officiel positionne pour
+  autoriser ce cas. La plateforme la pose désormais sur le service
+  interface — et sur lui seul, le moteur ne construisant rien. Sans elle,
+  le repli du WebUI est un démarrage en mode réduit (pas de détection des
+  modèles, pas de routage de personnalité, pas d'import des sessions CLI).
+
+### Appris — à ne pas refaire
+- **`/opt/hermes` n'est pas du cache jetable.** Vider ce dossier dans le
+  conteneur agent (pour forcer une source fraîche) casse le démarrage de
+  l'image elle-même : ses propres scripts `/etc/cont-init.d/` y cherchent
+  `stage2-hook.sh`, le module `hermes_cli` et le venv. Et un « Force
+  Deploy » ne repeuple PAS un volume nommé vidé sur place — Docker ne
+  recopie le contenu de l'image que lorsqu'il crée le volume. Le seul
+  remède : arrêter le service, `docker volume rm <uuid>_hermes-agent-src`
+  (jamais `_hermes-home` ni `_hermes-workspace`, qui portent les données
+  du client), puis redéployer.
+
 ## [Non publié — branche de test] — Le gateway démarre enfin, par le bon chemin
 
 ### Corrigé
