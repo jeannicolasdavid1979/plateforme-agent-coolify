@@ -2020,6 +2020,8 @@ function fleetRowHtml(a) {
       : `<button class="ghost" onclick="fleetSuspend('${a.id}')">Suspendre</button>`}
     <button class="ghost" onclick="fleetExtend('${a.id}')">+1 mois offert</button>
     <button class="ghost" onclick="checkAgentUpdates('${a.id}')">🔄 Updates</button>
+    <button class="ghost" onclick="forceAgentUpdate('${a.id}','${esc}')"
+            title="Repousse la config et redémarre l'agent même si aucun écart de version n'est détecté — utile après un incident ou un correctif qui ne change aucun numéro">⚡ Forcer</button>
     <button class="danger" onclick="fleetDelete('${a.id}','${esc}')">Supprimer</button>
   </div>`;
 }
@@ -2081,6 +2083,24 @@ async function requestAgentUpdate(agentId) {
     setTimeout(() => loadFleet(), 2000);
   } catch (e) {
     msgEl.textContent = `❌ ${e.message}`;
+  }
+}
+// Bouton de secours réservé à l'admin : repousse la config et redémarre
+// l'agent MÊME quand aucun écart de version n'est détecté. Deux cas où
+// « Updates » normal ne sert à rien : un correctif qui ne change aucun
+// numéro (ex. un entrypoint corrigé), ou un agent arrêté après un incident
+// que le contrôle « doit être en ligne » bloquerait sinon.
+async function forceAgentUpdate(agentId, name) {
+  if (!confirm(`Forcer une mise à jour de « ${name} » ?\n\nRepousse la configuration et redémarre l'agent, même sans écart de version détecté. À réserver aux cas de dépannage.`)) return;
+  const msgEl = $(`updates-${agentId}`);
+  if (msgEl) msgEl.textContent = '⏳ Mise à jour forcée en cours...';
+  try {
+    const r = await api(`/api/agents/${agentId}/request-update?force=true`, {method:'POST'});
+    if (msgEl) msgEl.innerHTML = `✅ Mise à jour forcée lancée — <a href="javascript:checkUpdateStatus('${agentId}')">voir l'état</a>`;
+    setTimeout(() => loadFleet(), 2000);
+  } catch (e) {
+    if (msgEl) msgEl.textContent = `❌ ${e.message}`;
+    else alert(e.message);
   }
 }
 async function checkUpdateStatus(agentId) {

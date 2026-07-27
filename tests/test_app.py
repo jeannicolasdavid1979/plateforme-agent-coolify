@@ -2317,3 +2317,64 @@ def test_no_false_gap_from_an_opaque_identifier():
     t.hermes_webui_version, t.hermes_agent_version = "0.52.76", "07e97d2f"
     updates = check_updates_available(t, {"webui": "0.52.76", "agent": "0.19.0"})
     assert updates == [], "aucun écart chiffrable ne doit être annoncé"
+
+
+def test_admin_can_force_an_update_with_no_version_gap(monkeypatch):
+    """Un correctif peut ne se voir dans AUCUN numéro de version (ex. un
+    entrypoint corrigé) : sans un moyen de forcer, il ne serait JAMAIS
+    repoussé aux agents déjà déployés."""
+    from app import agent_probe, agent_updates as au
+
+    monkeypatch.setattr(au, "fetch_latest_versions",
+                        lambda timeout=6.0: {"webui": "0.52.76", "agent": "0.15.1"})
+    monkeypatch.setattr(agent_probe, "detect_versions",
+                        lambda url, pw, timeout=8.0: {"webui": "0.52.76", "agent": "0.15.1"})
+
+    admin = _admin("force-admin@ex.io")
+    _headers, aid = _updatable_agent("forcee@ex.io", "forcee-agent")
+
+    # Versions strictement identiques : la voie normale refuse.
+    d = client.get(f"/api/agents/{aid}/check-updates", headers=admin).json()
+    assert d["up_to_date"] is True
+    assert client.post(f"/api/agents/{aid}/request-update", headers=admin).status_code == 409
+
+    # force=true passe malgré tout, et reste gratuit pour l'admin.
+    r = client.post(f"/api/agents/{aid}/request-update?force=true", headers=admin)
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "operator_update"
+
+
+def test_force_update_works_on_a_stopped_agent(monkeypatch):
+    """Un agent arrêté après un incident ne doit pas rester bloqué par le
+    contrôle « doit être en ligne » quand l'admin force la mise à jour."""
+    from app import agent_probe, agent_updates as au
+    from app.db import SessionFactory
+    from app.models import Tenant
+
+    monkeypatch.setattr(au, "fetch_latest_versions",
+                        lambda timeout=6.0: {"webui": "0.52.76", "agent": "0.15.1"})
+    monkeypatch.setattr(agent_probe, "detect_versions",
+                        lambda url, pw, timeout=8.0: {})
+
+    admin = _admin("force-stopped-admin@ex.io")
+    _headers, aid = _updatable_agent("stopped@ex.io", "stopped-agent")
+    with SessionFactory() as s:
+        s.get(Tenant, aid).status = "failed"  # ex : boucle de redémarrage
+        s.commit()
+
+    assert client.post(f"/api/agents/{aid}/request-update", headers=admin).status_code == 409
+    r = client.post(f"/api/agents/{aid}/request-update?force=true", headers=admin)
+    assert r.status_code == 200, r.text
+
+
+def test_a_client_cannot_force_an_update():
+    """`force` est réservé à l'admin — un client ne doit pas pouvoir
+    contourner ses propres gardes (agent en ligne, écart réel)."""
+    headers, aid = _updatable_agent("noforce@ex.io", "noforce-agent")
+    from app.db import SessionFactory
+    from app.models import Tenant
+    with SessionFactory() as s:
+        s.get(Tenant, aid).status = "failed"
+        s.commit()
+    r = client.post(f"/api/agents/{aid}/request-update?force=true", headers=headers)
+    assert r.status_code == 409  # force ignoré : le client reste bloqué

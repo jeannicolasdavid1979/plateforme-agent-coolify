@@ -1308,11 +1308,18 @@ def check_updates(agent_id: str, user: User = Depends(current_user), db: Session
 
 
 @router.post("/api/agents/{agent_id}/request-update")
-def request_update(agent_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    """Demande une mise à jour : crée Checkout (payant) ou débite crédit (gratuit)."""
-    tenant = _tenant_for_update(db, agent_id, user)
+def request_update(agent_id: str, force: bool = False,
+                   user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """Demande une mise à jour : crée Checkout (payant) ou débite crédit (gratuit).
 
-    if tenant.status != "running":
+    `force` (réservé à l'admin) court-circuite les deux gardes ci-dessous —
+    indispensable pour repousser un correctif qui ne se voit dans AUCUN
+    numéro de version (ex. un entrypoint corrigé) ou pour redémarrer un agent
+    arrêté manuellement suite à un incident, sans attendre un écart détecté."""
+    tenant = _tenant_for_update(db, agent_id, user)
+    force = force and user.is_admin
+
+    if tenant.status != "running" and not force:
         raise HTTPException(409, "Votre agent doit être en ligne pour être mis à jour")
 
     latest = agent_updates.get_cached_latest_versions(db)
@@ -1321,8 +1328,9 @@ def request_update(agent_id: str, user: User = Depends(current_user), db: Sessio
     # Un écart constaté justifie la mise à jour ; une version indéterminée
     # aussi, car les images suivent des tags flottants — un nouveau tirage
     # apporte alors la dernière build publiée. On refuse seulement quand on a
-    # CONSTATÉ que l'agent est déjà à jour.
-    if detected and not updates:
+    # CONSTATÉ que l'agent est déjà à jour — sauf demande explicite de forcer :
+    # un correctif peut ne se voir dans aucun numéro de version.
+    if detected and not updates and not force:
         raise HTTPException(409, "Votre agent est déjà à jour")
 
     update_cost = agent_updates.get_update_cost_eur(db)

@@ -3,6 +3,20 @@
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/).
 Les dates suivent l'ordre de développement.
 
+## [Non publié — branche de test] — Bouton de secours : forcer une mise à jour
+
+### Ajouté
+- **« ⚡ Forcer » en admin** (`POST /api/agents/{id}/request-update?force=true`,
+  réservé à l'admin) : repousse la configuration et redémarre l'agent MÊME
+  sans écart de version détecté. Deux situations où la mise à jour normale
+  ne sert à rien : un correctif qui ne change AUCUN numéro de version (le
+  retrait de `gateway run` de l'entrypoint, par exemple — aucune version
+  n'en témoigne, donc rien ne l'aurait jamais proposé aux agents déjà
+  déployés) ; ou un agent arrêté après un incident, que le contrôle
+  « doit être en ligne » bloquerait sinon. Reste gratuit pour l'admin,
+  comme toute mise à jour qu'il déclenche. Un client ne peut pas s'en servir
+  pour contourner ses propres gardes.
+
 ## [Non publié — branche de test] — Mises à jour visibles et pilotées par le client
 
 ### Ajouté
