@@ -2267,3 +2267,34 @@ def test_agent_exposes_its_last_update_for_the_waiting_screen():
 
     agent = client.get("/api/agents", headers=headers).json()["agents"][0]
     assert agent["last_update_at"]
+
+
+def test_engine_version_is_the_published_number_not_a_commit(monkeypatch):
+    """Le moteur publie ses versions sur PyPI (0.19.0). Les pister par
+    empreinte de commit donnait « 07e97d2f » : illisible pour un client, et
+    incomparable au numéro dont tout le monde parle."""
+    from app import agent_updates as au
+
+    seen = []
+
+    class _Resp:
+        def __init__(self, url):
+            self.url, self.status_code = url, 200
+        def json(self):
+            if "pypi.org" in self.url:
+                return {"info": {"version": "0.19.0"}}
+            return {"tag_name": "v0.52.149"}
+
+    class _Client:
+        def __init__(self, **kw): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def get(self, url, **kw):
+            seen.append(url)
+            return _Resp(url)
+
+    monkeypatch.setattr(au.httpx, "Client", _Client)
+    found = au.fetch_latest_versions()
+    assert found == {"webui": "0.52.149", "agent": "0.19.0"}
+    assert any("pypi.org/pypi/hermes-agent" in u for u in seen), seen
+    assert not any("/commits/" in u for u in seen), "plus d'empreinte de commit"

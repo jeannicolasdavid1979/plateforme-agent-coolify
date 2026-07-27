@@ -1,10 +1,15 @@
 """Suivi des versions amont des deux briques d'un agent Hermes.
 
-Un agent déployé, c'est deux images : l'interface (`nesquena/hermes-webui`,
-versionnée par releases) et le moteur (`NousResearch/hermes-agent`, qui suit
-sa branche principale au commit). Ce module relève les versions publiées,
+Un agent déployé, c'est deux briques : l'interface (`nesquena/hermes-webui`,
+versionnée par releases GitHub) et le moteur (`hermes-agent`, dont les
+VERSIONS sont publiées sur PyPI — 0.19.0…). Ce module relève ces versions,
 les met en cache, et dit pour un agent donné ce qui a bougé depuis son
 dernier déploiement.
+
+Attention au piège du moteur : ses images Docker portent des étiquettes
+DATÉES (`v2026.7.20`) qui ne disent rien de la version du logiciel, et son
+dépôt ne publie pas de release. Seul PyPI donne le numéro dont parlent les
+utilisateurs — celui qu'il faut afficher et comparer.
 
 Règle de conduite : le réseau n'est jamais bloquant. Si GitHub est
 injoignable, on sert le dernier relevé connu — jamais d'erreur 500 sur un
@@ -26,6 +31,8 @@ logger = logging.getLogger("agent_updates")
 # Les deux briques suivies, telles que déployées par le template Coolify.
 WEBUI_REPO = "nesquena/hermes-webui"
 AGENT_REPO = "NousResearch/hermes-agent"
+# Le moteur publie ses versions sur PyPI (0.19.0…), pas par releases GitHub.
+AGENT_PACKAGE = "hermes-agent"
 
 WEBUI_LATEST_KEY = "hermes_webui_latest"
 AGENT_LATEST_KEY = "hermes_agent_latest"
@@ -37,18 +44,25 @@ def fetch_latest_versions(timeout: float = 6.0) -> dict[str, str | None]:
     None pour la brique concernée (l'appelant conserve alors son cache)."""
     versions: dict[str, str | None] = {"webui": None, "agent": None}
     try:
-        with httpx.Client(timeout=timeout, headers={"Accept": "application/vnd.github+json"}) as client:
+        with httpx.Client(timeout=timeout, headers={"Accept": "application/json"}) as client:
             try:
-                r = client.get(f"https://api.github.com/repos/{WEBUI_REPO}/releases/latest")
+                r = client.get(f"https://api.github.com/repos/{WEBUI_REPO}/releases/latest",
+                               headers={"Accept": "application/vnd.github+json"})
                 if r.status_code == 200:
                     versions["webui"] = (r.json().get("tag_name") or "").lstrip("v") or None
             except Exception as exc:
                 logger.warning("Relevé de version webui impossible : %s", exc)
 
+            # Le moteur se relève sur PyPI, pas sur GitHub : c'est là qu'il
+            # publie ses VERSIONS (0.19.0…), les seules comparables et les
+            # seules dont parlent les utilisateurs. Une empreinte de commit
+            # (« 07e97d2f ») ne dit rien à personne et ne se compare à rien —
+            # ses images Docker, elles, sont datées (v2026.7.20), ce qui ne
+            # renseigne pas davantage sur la version du logiciel.
             try:
-                r = client.get(f"https://api.github.com/repos/{AGENT_REPO}/commits/main")
+                r = client.get(f"https://pypi.org/pypi/{AGENT_PACKAGE}/json")
                 if r.status_code == 200:
-                    versions["agent"] = ((r.json().get("sha") or "")[:8]) or None
+                    versions["agent"] = (r.json().get("info", {}).get("version") or "") or None
             except Exception as exc:
                 logger.warning("Relevé de version agent impossible : %s", exc)
     except Exception as exc:  # création du client (proxy, DNS…)

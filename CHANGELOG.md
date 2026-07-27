@@ -37,6 +37,13 @@ Les dates suivent l'ordre de développement.
   avant ce correctif la récupèrent sans redéploiement.
 
 ### Corrigé
+- **Version du moteur pistée au mauvais endroit** : elle était relevée par
+  empreinte de commit GitHub (« 07e97d2f ») — illisible pour un client, et
+  incomparable au numéro dont parlent les utilisateurs. Le moteur publie ses
+  versions sur **PyPI** (`hermes-agent`, 0.19.0 au moment d'écrire) ; c'est
+  désormais cette source qui fait référence. Ses images Docker, elles, portent
+  des étiquettes datées (`v2026.7.20`) qui ne renseignent pas sur la version
+  du logiciel.
 - **« Agent introuvable » sur l'agent d'un client, depuis l'admin** : la
   vérification de version n'acceptait que les agents du compte appelant.
   L'exploitant voyait donc une croix rouge sur un agent parfaitement
